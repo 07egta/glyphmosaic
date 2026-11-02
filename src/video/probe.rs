@@ -169,19 +169,52 @@ pub fn probe(path: &Path) -> Result<VideoInfo> {
     })
 }
 
+fn is_8bit_pix_fmt(pix: &str) -> bool {
+    matches!(
+        pix,
+        "yuv420p"
+            | "yuvj420p"
+            | "yuv422p"
+            | "yuvj422p"
+            | "yuv444p"
+            | "yuvj444p"
+            | "yuv411p"
+            | "yuv410p"
+            | "yuv440p"
+            | "yuva420p"
+            | "yuva422p"
+            | "yuva444p"
+            | "nv12"
+            | "nv21"
+            | "nv16"
+            | "nv61"
+            | "rgb24"
+            | "bgr24"
+            | "rgba"
+            | "bgra"
+            | "argb"
+            | "abgr"
+            | "rgb0"
+            | "bgr0"
+            | "0rgb"
+            | "0bgr"
+            | "gray"
+            | "ya8"
+            | "gbrp"
+            | "pal8"
+    )
+}
+
 pub fn validate_input(info: &VideoInfo) -> Result<()> {
-    let pix = info.pix_fmt.to_ascii_lowercase();
     let hdr = matches!(
         info.color_transfer.as_deref(),
         Some("smpte2084") | Some("arib-std-b67")
     );
-    if hdr
-        || pix.contains("10le")
-        || pix.contains("10be")
-        || pix.contains("12")
-        || pix.contains("p010")
-    {
-        bail!("HDR/10-bit input is not supported; convert to 8-bit SDR first");
+    if hdr || !is_8bit_pix_fmt(&info.pix_fmt.to_ascii_lowercase()) {
+        bail!(
+            "HDR/10-bit input is not supported; only 8-bit SDR pixel formats are accepted (got {})",
+            info.pix_fmt
+        );
     }
     if info.field_order != "progressive" && info.field_order != "unknown" {
         bail!("interlaced input is not supported; deinterlace first");
@@ -275,6 +308,13 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("interlaced"));
+
+        info.field_order = "progressive".into();
+        info.pix_fmt = "gbrp16le".into();
+        assert!(validate_input(&info)
+            .unwrap_err()
+            .to_string()
+            .contains("10-bit"));
     }
 
     #[test]

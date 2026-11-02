@@ -37,6 +37,11 @@ pub fn build(opts: &BuildOptions) -> Result<Dictionary> {
         coarse_feature: 4,
         unicode_version: "17.0".to_string(),
         fonts: fontset.fonts.iter().map(|f| f.record.clone()).collect(),
+        created_by: format!("glyphmosaic {}", crate::VERSION),
+        include_pua: opts.include_pua,
+        min_ink: opts.min_ink,
+        render_px: 128.0,
+        stretch_px: 64,
     };
     let mut dict = Dictionary::new(header);
 

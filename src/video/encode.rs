@@ -36,8 +36,9 @@ pub fn validate_audio_copy(codec: Option<&str>) -> Result<()> {
 
 pub struct Encoder {
     child: Child,
-    stdin: BufWriter<ChildStdin>,
+    stdin: Option<BufWriter<ChildStdin>>,
     frame_size: usize,
+    finished: bool,
 }
 
 impl Encoder {
@@ -102,8 +103,9 @@ impl Encoder {
             .ok_or_else(|| anyhow::anyhow!("failed to capture ffmpeg stdin"))?;
         Ok(Self {
             child,
-            stdin: BufWriter::with_capacity(1 << 20, stdin),
+            stdin: Some(BufWriter::with_capacity(1 << 20, stdin)),
             frame_size: width as usize * height as usize * 3,
+            finished: false,
         })
     }
 
@@ -116,18 +118,31 @@ impl Encoder {
             );
         }
         self.stdin
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("ffmpeg stdin is already closed"))?
             .write_all(rgb)
             .context("failed to write frame to ffmpeg")
     }
 
     pub fn finish(mut self) -> Result<()> {
-        self.stdin.flush().context("failed to flush ffmpeg stdin")?;
-        drop(self.stdin);
+        if let Some(mut writer) = self.stdin.take() {
+            writer.flush().context("failed to flush ffmpeg stdin")?;
+        }
         let status = self.child.wait().context("failed to wait for ffmpeg")?;
+        self.finished = true;
         if !status.success() {
             bail!("ffmpeg exited with {status}");
         }
         Ok(())
+    }
+}
+
+impl Drop for Encoder {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
     }
 }
 

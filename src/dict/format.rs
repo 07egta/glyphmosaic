@@ -10,16 +10,53 @@ pub const MAGIC: &[u8; 4] = b"GMD1";
 pub const VERSION: u32 = 1;
 pub const ENTRY_SIZE: usize = 4 + 2 + 2 + 256 + 16;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct DictHeader {
     pub version: u32,
     pub cell_feature: u16,
     pub coarse_feature: u16,
     pub unicode_version: String,
     pub fonts: Vec<FontRecord>,
+    #[serde(default)]
+    pub created_by: String,
+    #[serde(default)]
+    pub include_pua: bool,
+    #[serde(default = "default_min_ink")]
+    pub min_ink: u8,
+    #[serde(default = "default_render_px")]
+    pub render_px: f32,
+    #[serde(default = "default_stretch_px")]
+    pub stretch_px: u16,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+fn default_min_ink() -> u8 {
+    1
+}
+fn default_render_px() -> f32 {
+    128.0
+}
+fn default_stretch_px() -> u16 {
+    64
+}
+
+impl Default for DictHeader {
+    fn default() -> Self {
+        Self {
+            version: VERSION,
+            cell_feature: 16,
+            coarse_feature: 4,
+            unicode_version: "17.0".to_string(),
+            fonts: Vec::new(),
+            created_by: format!("glyphmosaic {}", crate::VERSION),
+            include_pua: false,
+            min_ink: 1,
+            render_px: 128.0,
+            stretch_px: 64,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Dictionary {
     pub header: DictHeader,
     pub codepoints: Vec<u32>,
@@ -98,6 +135,19 @@ impl Dictionary {
         }
         let header_len = read_u32(&mut input)? as usize;
         let count = read_u32(&mut input)? as usize;
+
+        let file_size = std::fs::metadata(path)
+            .with_context(|| format!("failed to stat {}", path.display()))?
+            .len() as usize;
+        let expected = 16usize
+            .checked_add(header_len)
+            .and_then(|v| v.checked_add(count.checked_mul(ENTRY_SIZE)?))
+            .ok_or_else(|| anyhow::anyhow!("dictionary size overflow"))?;
+        if expected != file_size {
+            bail!(
+                "dictionary size mismatch: header and {count} entries need {expected} bytes, file has {file_size}"
+            );
+        }
         let mut header_json = vec![0u8; header_len];
         input.read_exact(&mut header_json)?;
         let header: DictHeader =
@@ -173,6 +223,7 @@ mod tests {
                 name: "Jigmo".into(),
                 sha256: "00".repeat(32),
             }],
+            ..DictHeader::default()
         };
         let mut d = Dictionary::new(header);
         d.push('A', 0, [1u8; 256], [2u8; 16]);
@@ -203,5 +254,32 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("magic"));
+    }
+
+    #[test]
+    fn rejects_size_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("truncated.gmd");
+        sample().write(&path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::write(&path, &bytes[..bytes.len() - 1]).unwrap();
+        assert!(Dictionary::read(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("size mismatch"));
+    }
+
+    #[test]
+    fn empty_dictionary_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.gmd");
+        let mut d = sample();
+        d.codepoints.clear();
+        d.font_indices.clear();
+        d.full.clear();
+        d.coarse.clear();
+        d.coarse8.clear();
+        d.write(&path).unwrap();
+        assert_eq!(Dictionary::read(&path).unwrap().len(), 0);
     }
 }

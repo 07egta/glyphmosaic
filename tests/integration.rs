@@ -78,7 +78,9 @@ fn end_to_end_mosaic_and_panel() {
     let info = glyphmosaic::video::probe::probe(&out).unwrap();
     assert_eq!(info.width % 2, 0);
     assert_eq!(info.height % 2, 0);
-    assert!(info.frame_count.unwrap_or(0) <= 5);
+    if let Some(frames) = info.frame_count {
+        assert_eq!(frames, 3, "--limit 3 must produce exactly 3 frames");
+    }
 }
 
 #[test]
@@ -120,6 +122,105 @@ fn no_audio_input_succeeds() {
 }
 
 #[test]
+fn odd_dimensions_end_to_end() {
+    let Some(font) = test_font() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("odd.mkv");
+    let ok = Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=s=101x75:r=10:d=0.5",
+            "-c:v",
+            "ffv1",
+        ])
+        .arg(&input)
+        .status()
+        .unwrap();
+    assert!(ok.success());
+
+    let opts = glyphmosaic::dict::build::BuildOptions {
+        font_paths: vec![font],
+        include_pua: false,
+        min_ink: 1,
+        jobs: 2,
+    };
+    let dict = glyphmosaic::dict::build::build(&opts).unwrap();
+    let dict_path = dir.path().join("fonts.gmd");
+    dict.write(&dict_path).unwrap();
+
+    let out = dir.path().join("out.mp4");
+    glyphmosaic::cli::render_for_test(
+        &input,
+        &dict_path,
+        &out,
+        glyphmosaic::render::RenderConfig {
+            grid_cols: 4,
+            grid_rows: 3,
+            cell_height: 24,
+            layout: glyphmosaic::render::Layout::Mosaic,
+            panel_width: 80,
+            cache_mb: 8,
+        },
+        16,
+        false,
+        10,
+    )
+    .unwrap();
+    let info = glyphmosaic::video::probe::probe(&out).unwrap();
+    assert_eq!(info.width % 2, 0);
+    assert_eq!(info.height % 2, 0);
+    if let Some(frames) = info.frame_count {
+        assert_eq!(frames, 5);
+    }
+}
+
+#[test]
+fn empty_dictionary_reports_fix() {
+    let dir = tempfile::tempdir().unwrap();
+    let dict_path = dir.path().join("empty.gmd");
+    let d = glyphmosaic::Dictionary::new(glyphmosaic::dict::DictHeader {
+        version: 1,
+        cell_feature: 16,
+        coarse_feature: 4,
+        unicode_version: "17.0".into(),
+        fonts: vec![],
+        ..glyphmosaic::dict::DictHeader::default()
+    });
+    d.write(&dict_path).unwrap();
+    let input = dir.path().join("in.mp4");
+    make_clip(&input, false);
+    let err = glyphmosaic::cli::render_for_test(
+        &input,
+        &dict_path,
+        &dir.path().join("o.mp4"),
+        glyphmosaic::render::RenderConfig {
+            grid_cols: 2,
+            grid_rows: 2,
+            cell_height: 24,
+            layout: glyphmosaic::render::Layout::Mosaic,
+            panel_width: 80,
+            cache_mb: 8,
+        },
+        8,
+        false,
+        1,
+    )
+    .expect_err("expected an error")
+    .to_string();
+    assert!(
+        err.contains("dictionary is empty"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn missing_font_reports_fix() {
     let dir = tempfile::tempdir().unwrap();
     let dict_path = dir.path().join("bad.gmd");
@@ -133,6 +234,7 @@ fn missing_font_reports_fix() {
             name: "nowhere".into(),
             sha256: "00".repeat(32),
         }],
+        ..glyphmosaic::dict::DictHeader::default()
     });
     d.push('A', 0, [1u8; 256], [1u8; 16]);
     d.write(&dict_path).unwrap();

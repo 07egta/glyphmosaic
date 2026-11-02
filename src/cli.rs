@@ -95,7 +95,7 @@ struct RenderArgs {
     cell_height: u32,
     #[arg(long, default_value_t = 480)]
     panel_width: u32,
-    #[arg(long, default_value_t = 256)]
+    #[arg(long, default_value_t = 1024)]
     top_k: usize,
     #[arg(long)]
     exact: bool,
@@ -151,7 +151,12 @@ fn parse_grid(s: &str) -> Result<(usize, usize)> {
 }
 
 fn build_dict(args: DictBuildArgs) -> Result<()> {
-    let font_paths = collect_font_paths(&args.fonts, args.font_root.as_deref())?;
+    let globs = if args.fonts.is_empty() {
+        vec!["fonts/**/*.ttf".to_string(), "fonts/**/*.otf".to_string()]
+    } else {
+        args.fonts.clone()
+    };
+    let font_paths = collect_font_paths(&globs, args.font_root.as_deref())?;
     let opts = BuildOptions {
         font_paths,
         include_pua: args.include_pua,
@@ -185,6 +190,11 @@ fn inspect(path: &Path) -> Result<()> {
         dict.header.coarse_feature
     );
     println!("unicode version: {}", dict.header.unicode_version);
+    println!("created by: {}", dict.header.created_by);
+    println!(
+        "build params: include_pua={} min_ink={} render_px={} stretch_px={}",
+        dict.header.include_pua, dict.header.min_ink, dict.header.render_px, dict.header.stretch_px
+    );
     println!("entries: {}", dict.len());
     println!("distinct codepoints: {}", unique.len());
     println!("fonts:");
@@ -292,6 +302,9 @@ fn render_impl(job: RenderJob<'_>) -> Result<()> {
         bail!("--out is required unless --no-encode is set");
     }
     let dict = Dictionary::read(job.dict_path)?;
+    if dict.is_empty() {
+        bail!("dictionary is empty: rebuild it with `glyphmosaic dict build`");
+    }
     let fontset = FontSet::load_for_dictionary(&dict.header.fonts, job.fonts, job.font_root)?;
     let info = probe(job.input)?;
     validate_input(&info)?;

@@ -5,8 +5,6 @@ use crate::raster::coarse8_from_full;
 
 /// Number of coarse candidates kept before the 8×8 rescore.
 const COARSE_CANDIDATES: usize = 32_768;
-/// Number of 8×8 candidates kept before the full 16×16 rescore.
-const MID_CANDIDATES: usize = 1_024;
 
 fn truncate_top(scored: &mut Vec<(u32, usize)>, top_k: usize) {
     let k = top_k.max(1).min(scored.len());
@@ -95,7 +93,7 @@ pub fn match_one(dict: &Dictionary, q: &Query, top_k: usize, exact: bool) -> Mat
     } else {
         let coarse = scan_coarse(dict, &q.coarse, COARSE_CANDIDATES);
         let q8 = coarse8_from_full(&q.full);
-        let mid = refine_mid(dict, &q8, &coarse, top_k.max(MID_CANDIDATES));
+        let mid = refine_mid(dict, &q8, &coarse, top_k.max(1));
         refine_full(dict, &q.full, &mid)
     };
     MatchResult { index, mse }
@@ -113,6 +111,7 @@ mod tests {
             coarse_feature: 4,
             unicode_version: "17.0".into(),
             fonts: vec![],
+            ..DictHeader::default()
         };
         let mut d = Dictionary::new(header);
         for i in 0..entries {
@@ -187,5 +186,23 @@ mod tests {
         assert_eq!(c[0], 200);
         assert_eq!(c[7], 100);
         assert_eq!(c[8], 200);
+    }
+
+    #[test]
+    fn truncate_top_keeps_best_and_breaks_ties() {
+        let mut scored = vec![(5, 1), (5, 0), (1, 5), (1, 4), (9, 9)];
+        truncate_top(&mut scored, 3);
+        assert_eq!(scored, vec![(1, 4), (1, 5), (5, 0)]);
+    }
+
+    #[test]
+    fn staged_match_survives_pruning() {
+        let d = dict_with(40_000);
+        let i = 35_000;
+        let q = Query {
+            full: d.full[i],
+            coarse: d.coarse[i],
+        };
+        assert_eq!(match_one(&d, &q, 1_024, false).index, i);
     }
 }

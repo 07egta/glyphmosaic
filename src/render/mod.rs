@@ -216,6 +216,7 @@ mod tests {
             coarse_feature: 4,
             unicode_version: "17.0".into(),
             fonts: vec![],
+            ..DictHeader::default()
         });
         dict.push('A', 0, [255u8; 256], [255u8; 16]);
         let cfg = RenderConfig {

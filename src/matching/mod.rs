@@ -81,6 +81,7 @@ mod tests {
             coarse_feature: 4,
             unicode_version: "17.0".into(),
             fonts: vec![],
+            ..DictHeader::default()
         };
         let mut d = Dictionary::new(header);
         for i in 0..n {
@@ -133,6 +134,17 @@ mod tests {
         let q = Query {
             full: [0u8; 256],
             coarse: [0u8; 16],
+        };
+        let (r, _) = match_cells(&d, &[q], 8, false, 1);
+        assert!(r[0].index < d.len());
+    }
+
+    #[test]
+    fn white_query_still_returns_an_index() {
+        let d = dict(50);
+        let q = Query {
+            full: [255u8; 256],
+            coarse: [255u8; 16],
         };
         let (r, _) = match_cells(&d, &[q], 8, false, 1);
         assert!(r[0].index < d.len());
