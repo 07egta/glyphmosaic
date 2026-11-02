@@ -116,5 +116,7 @@ mod tests {
         assert_eq!(a.codepoints, b.codepoints);
         assert_eq!(a.full, b.full);
         assert!(a.full.iter().any(|f| f.iter().any(|&v| v > 0)));
+        assert_eq!(a.header.min_ink, 1);
+        assert!(a.header.created_by.starts_with("glyphmosaic"));
     }
 }

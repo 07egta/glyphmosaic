@@ -151,12 +151,24 @@ fn parse_grid(s: &str) -> Result<(usize, usize)> {
 }
 
 fn build_dict(args: DictBuildArgs) -> Result<()> {
-    let globs = if args.fonts.is_empty() {
-        vec!["fonts/**/*.ttf".to_string(), "fonts/**/*.otf".to_string()]
+    let font_paths = if args.fonts.is_empty() {
+        let mut found = Vec::new();
+        for pattern in ["fonts/**/*.ttf", "fonts/**/*.otf"] {
+            if let Ok(mut paths) =
+                collect_font_paths(&[pattern.to_string()], args.font_root.as_deref())
+            {
+                found.append(&mut paths);
+            }
+        }
+        found.sort();
+        found.dedup();
+        if found.is_empty() {
+            bail!("no font files found under fonts/; run scripts/fetch-fonts.ps1");
+        }
+        found
     } else {
-        args.fonts.clone()
+        collect_font_paths(&args.fonts, args.font_root.as_deref())?
     };
-    let font_paths = collect_font_paths(&globs, args.font_root.as_deref())?;
     let opts = BuildOptions {
         font_paths,
         include_pua: args.include_pua,

@@ -221,6 +221,24 @@ fn empty_dictionary_reports_fix() {
 }
 
 #[test]
+fn dict_build_defaults_to_fonts_dir() {
+    let Some(font) = test_font() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let fonts = dir.path().join("fonts");
+    std::fs::create_dir_all(&fonts).unwrap();
+    std::fs::copy(font, fonts.join("Test.ttf")).unwrap();
+    let status = Command::new(env!("CARGO_BIN_EXE_glyphmosaic"))
+        .current_dir(dir.path())
+        .args(["dict", "build", "--out", "d.gmd"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(dir.path().join("d.gmd").exists());
+}
+
+#[test]
 fn missing_font_reports_fix() {
     let dir = tempfile::tempdir().unwrap();
     let dict_path = dir.path().join("bad.gmd");

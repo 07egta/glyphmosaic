@@ -243,6 +243,9 @@ mod tests {
         assert_eq!(b.full, a.full);
         assert_eq!(b.coarse, a.coarse);
         assert_eq!(b.header.fonts, a.header.fonts);
+        assert_eq!(b.header.created_by, a.header.created_by);
+        assert_eq!(b.header.min_ink, 1);
+        assert_eq!(b.header.stretch_px, 64);
     }
 
     #[test]
