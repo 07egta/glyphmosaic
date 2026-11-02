@@ -5,6 +5,7 @@ pub mod dict;
 pub mod error;
 pub mod fonts;
 pub mod imageops;
+pub mod matching;
 pub mod raster;
 
 #[cfg(test)]
