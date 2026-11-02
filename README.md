@@ -11,6 +11,10 @@ Unicode character, and the chosen glyph is stretched to fill the cell.
 
 No AI image generation. Every pick is a real font glyph.
 
+![demo frame](docs/demo-frame.png)
+
+*Synthetic test clip rendered at 4×3 with the side panel (1920×1080).*
+
 ## Quick start
 
 Requires Rust (stable), `ffmpeg`/`ffprobe` on `PATH`, and PowerShell for the
@@ -49,10 +53,12 @@ cargo run --release -- render -i input.mp4 -d fonts.gmd -o output.mp4 `
 2. **Cell features.** Decoded frames are converted to luma and area-resized so
    every grid cell is a 16×16 feature. The same cell is averaged into 4×4 for
    the coarse pass.
-3. **Matching.** A 4×4 coarse scan ranks the whole dictionary; the best 256
-   candidates are rescored at 16×16 with integer MSE. Ties break by dictionary
-   index, so results are deterministic. `--exact` skips the coarse pass and
-   scans the full feature for every entry.
+3. **Matching.** A 4×4 coarse scan keeps the best 32,768 candidates; an 8×8
+   rescore keeps 1,024; the best 256 are rescored at 16×16 with integer MSE.
+   Ties break by dictionary index, so results are deterministic. On a 60-frame
+   sample (720 cells) this matched the exhaustive `--exact` result 100% of the
+   time. `--exact` skips the staged passes and scans the full 16×16 feature for
+   every entry.
 4. **Rendering.** Chosen glyphs are re-rasterized from the original font at the
    output cell size (LRU cached), tiled into a mosaic, and — in `panel` mode —
    paired with the source frame and a `U+XXXX` list on the right.
@@ -72,13 +78,28 @@ Release build, Intel Core Ultra 7 258V (8 threads), dictionary above:
 | Step | Result |
 |---|---|
 | Dictionary build (9 fonts) | ~10.5 s warm, 59 MB `.gmd` |
-| Matching, 300 frames at 4×3 (3,600 cells) | ~0.96 s |
-| Projected 6,955 frames (83,460 cells) | ~22 s |
-| End-to-end 1080p encode | measured in `docs/` demo flow |
+| Matching, 300 frames at 4×3 (3,600 cells) | ~6 s (plus ~8 s startup) |
+| Projected 6,955 frames (83,460 cells) | ~2.3 min |
+| Demo: 10 s 640×480 → 1920×1080 with panel + AAC | 18.8 s |
+| `--exact` on 60 frames (720 cells) | ~3.3 s after startup |
 
 The 30 MB `Jigmo.ttf`, 35 MB `Jigmo2.ttf`, and 7.5 MB `Jigmo3.ttf` (plus the
-Noto fonts, ~100 MB total) are loaded and hashed at startup (~3 s), so short
-runs are dominated by setup.
+Noto fonts, ~100 MB total) are loaded and hashed at startup (~6–8 s on this
+machine), so short runs are dominated by setup.
+
+Example stats from the 10-second demo:
+
+```text
+Total picks: 3,600
+Distinct characters: 34
+Characters used once: 13
+Top 10:
+  ▓ U+2593: 1,109 (30.8%)
+  🀫 U+1F02B: 906 (25.2%)
+  ░ U+2591: 784 (21.8%)
+  ㅣ U+3163: 638 (17.7%)
+  ...
+```
 
 ## CLI
 
