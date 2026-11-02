@@ -9,6 +9,7 @@ pub mod imageops;
 pub mod matching;
 pub mod raster;
 pub mod render;
+pub mod stats;
 pub mod video;
 
 pub use dict::Dictionary;
