@@ -4,6 +4,7 @@ pub mod cli;
 pub mod dict;
 pub mod error;
 pub mod fonts;
+pub mod frame;
 pub mod imageops;
 pub mod matching;
 pub mod raster;
