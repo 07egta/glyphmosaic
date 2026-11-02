@@ -1,5 +1,5 @@
 use super::ivf::IVF_PROBE;
-use super::simd::{coarse_score, coarse_score64, full_score};
+use super::simd::{coarse_score, coarse_score64, full_score_bounded};
 use super::{MatchResult, Query};
 use crate::dict::Dictionary;
 use crate::raster::coarse8_from_full;
@@ -50,8 +50,31 @@ pub fn refine_mid(
     scored
 }
 
+/// Same as [`refine_mid`], for candidates that come straight from the IVF index
+/// as plain dictionary indices (no intermediate `(score, index)` list).
+pub fn refine_mid_indices(
+    dict: &Dictionary,
+    q: &[u8; 64],
+    candidates: &[u32],
+    top_k: usize,
+) -> Vec<(u32, usize)> {
+    let mut scored: Vec<(u32, usize)> = candidates
+        .iter()
+        .map(|&i| i as usize)
+        .filter(|&index| index < dict.len())
+        .map(|index| (coarse_score64(q, &dict.coarse8[index]), index))
+        .collect();
+    truncate_top(&mut scored, top_k);
+    scored
+}
+
 /// Rescore candidates at full resolution and return `(index, mse)`.
 /// With an empty candidate list, scan the whole dictionary.
+///
+/// The comparison is on `(score, index)`, so ties go to the lowest index no
+/// matter in which order candidates arrive. A candidate is abandoned part-way
+/// as soon as it is strictly worse than the best so far, which never changes
+/// the winner.
 pub fn refine_full(dict: &Dictionary, q: &[u8; 256], candidates: &[(u32, usize)]) -> (usize, u32) {
     if dict.is_empty() {
         return (0, u32::MAX);
@@ -59,7 +82,7 @@ pub fn refine_full(dict: &Dictionary, q: &[u8; 256], candidates: &[(u32, usize)]
     let mut best = (u32::MAX, usize::MAX);
     if candidates.is_empty() {
         for (index, glyph) in dict.full.iter().enumerate() {
-            let score = full_score(q, glyph);
+            let score = full_score_bounded(q, glyph, best.0);
             if (score, index) < best {
                 best = (score, index);
             }
@@ -69,7 +92,7 @@ pub fn refine_full(dict: &Dictionary, q: &[u8; 256], candidates: &[(u32, usize)]
             if index >= dict.len() {
                 continue;
             }
-            let score = full_score(q, &dict.full[index]);
+            let score = full_score_bounded(q, &dict.full[index], best.0);
             if (score, index) < best {
                 best = (score, index);
             }
@@ -93,15 +116,16 @@ pub fn match_one(dict: &Dictionary, q: &Query, top_k: usize, exact: bool) -> Mat
         refine_full(dict, &q.full, &[])
     } else {
         let q8 = coarse8_from_full(&q.full);
-        let coarse = match &dict.index {
-            Some(index) if dict.len() >= 20_000 => index
-                .candidates(&q8, IVF_PROBE)
-                .into_iter()
-                .map(|i| (0u32, i as usize))
-                .collect(),
-            _ => scan_coarse(dict, &q.coarse, COARSE_CANDIDATES),
+        let mid = match &dict.index {
+            Some(index) if dict.len() >= 20_000 => {
+                let candidates = index.candidates(&q8, IVF_PROBE);
+                refine_mid_indices(dict, &q8, &candidates, top_k.max(1))
+            }
+            _ => {
+                let coarse = scan_coarse(dict, &q.coarse, COARSE_CANDIDATES);
+                refine_mid(dict, &q8, &coarse, top_k.max(1))
+            }
         };
-        let mid = refine_mid(dict, &q8, &coarse, top_k.max(1));
         refine_full(dict, &q.full, &mid)
     };
     MatchResult { index, mse }

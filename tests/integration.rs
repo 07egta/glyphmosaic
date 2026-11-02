@@ -278,3 +278,57 @@ fn missing_font_reports_fix() {
     .to_string();
     assert!(err.contains("--fonts"), "unexpected error: {err}");
 }
+
+/// An output path that cannot be created must make the render fail promptly.
+/// (The pipeline once hung here: the writer exited while the reader was still
+/// waiting for a frame buffer to come back.)
+#[test]
+fn unwritable_output_fails_instead_of_hanging() {
+    let Some(font) = test_font() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("in.mp4");
+    make_clip(&input, true);
+    let dict = glyphmosaic::dict::build::build(&glyphmosaic::dict::build::BuildOptions {
+        font_paths: vec![font],
+        include_pua: false,
+        min_ink: 1,
+        jobs: 2,
+    })
+    .unwrap();
+    let dict_path = dir.path().join("fonts.gmd");
+    dict.write(&dict_path).unwrap();
+    let bad_out = dir.path().join("missing-dir").join("out.mp4");
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for _ in 0..10 {
+            let result = glyphmosaic::cli::render_for_test(
+                &input,
+                &dict_path,
+                &bad_out,
+                glyphmosaic::render::RenderConfig {
+                    grid_cols: 4,
+                    grid_rows: 3,
+                    cell_height: 24,
+                    layout: glyphmosaic::render::Layout::Mosaic,
+                    panel_width: 80,
+                    cache_mb: 8,
+                },
+                16,
+                false,
+                10,
+            );
+            if result.is_ok() {
+                let _ = tx.send(false);
+                return;
+            }
+        }
+        let _ = tx.send(true);
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(60)) {
+        Ok(all_failed) => assert!(all_failed, "render to an unwritable path succeeded"),
+        Err(_) => panic!("render hung on an unwritable output path"),
+    }
+}

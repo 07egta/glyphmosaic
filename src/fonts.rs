@@ -1,9 +1,11 @@
 use anyhow::{anyhow, bail, Context, Result};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use unicode_general_category::{get_general_category, GeneralCategory};
 
 use crate::error::GmError;
@@ -15,10 +17,65 @@ pub struct FontRecord {
     pub sha256: String,
 }
 
+/// A font whose expensive `fontdue` parse happens on first use.
+///
+/// `fontdue::Font::from_bytes` converts every glyph outline up front, which
+/// takes seconds for the large CJK fonts (Jigmo) even if a render only ever
+/// draws a handful of characters. Keeping the raw bytes and parsing on demand
+/// means a render only pays for the fonts its matches actually come from.
+pub struct LazyFont {
+    label: String,
+    bytes: Vec<u8>,
+    font: OnceLock<Result<fontdue::Font, String>>,
+}
+
+impl LazyFont {
+    pub fn new(label: impl Into<String>, bytes: Vec<u8>) -> Self {
+        Self {
+            label: label.into(),
+            bytes,
+            font: OnceLock::new(),
+        }
+    }
+
+    /// Wrap an already-parsed font.
+    pub fn from_font(font: fontdue::Font) -> Self {
+        Self {
+            label: String::new(),
+            bytes: Vec::new(),
+            font: OnceLock::from(Ok(font)),
+        }
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        self.font.get().is_some()
+    }
+
+    /// Parse the font if that has not happened yet. A failure is remembered.
+    pub fn get(&self) -> Result<&fontdue::Font> {
+        self.font
+            .get_or_init(|| {
+                fontdue::Font::from_bytes(self.bytes.as_slice(), fontdue::FontSettings::default())
+                    .map_err(|e| e.to_string())
+            })
+            .as_ref()
+            .map_err(|e| anyhow!("failed to load font {}: {e}", self.label))
+    }
+}
+
+impl From<fontdue::Font> for LazyFont {
+    fn from(font: fontdue::Font) -> Self {
+        Self::from_font(font)
+    }
+}
+
 pub struct LoadedFont {
     pub record: FontRecord,
-    pub bytes: Vec<u8>,
-    pub font: fontdue::Font,
+    pub font: LazyFont,
 }
 
 pub struct FontSet {
@@ -219,6 +276,8 @@ fn font_name(face: &ttf_parser::Face, path: &Path) -> String {
         })
 }
 
+/// Read and hash every font, then parse them all (in parallel: the parse is the
+/// slow part). Used by `dict build`, which needs every glyph anyway.
 pub fn load_fonts(paths: &[PathBuf], root: Option<&Path>) -> Result<FontSet> {
     let mut fonts = Vec::with_capacity(paths.len());
     for path in paths {
@@ -228,8 +287,7 @@ pub fn load_fonts(paths: &[PathBuf], root: Option<&Path>) -> Result<FontSet> {
         let face = ttf_parser::Face::parse(&bytes, 0)
             .with_context(|| format!("failed to parse font {}", path.display()))?;
         let name = font_name(&face, path);
-        let font = fontdue::Font::from_bytes(bytes.clone(), fontdue::FontSettings::default())
-            .map_err(|e| anyhow!("failed to load font {}: {e}", path.display()))?;
+        let font = LazyFont::new(path.display().to_string(), bytes);
         let stored_path = match root {
             Some(root) => path
                 .strip_prefix(root)
@@ -244,10 +302,12 @@ pub fn load_fonts(paths: &[PathBuf], root: Option<&Path>) -> Result<FontSet> {
                 name,
                 sha256,
             },
-            bytes,
             font,
         });
     }
+    fonts
+        .par_iter()
+        .try_for_each(|f| f.font.get().map(|_| ()))?;
     Ok(FontSet { fonts })
 }
 
@@ -300,12 +360,11 @@ impl FontSet {
                 ))
                 .into());
             }
-            let font = fontdue::Font::from_bytes(bytes.clone(), fontdue::FontSettings::default())
-                .map_err(|e| anyhow!("failed to load font {}: {e}", path.display()))?;
+            // Verified by hash above; the (slow) glyph parse is deferred until a
+            // match actually needs this font.
             fonts.push(LoadedFont {
                 record: info.clone(),
-                bytes,
-                font,
+                font: LazyFont::new(path.display().to_string(), bytes),
             });
         }
         Ok(FontSet { fonts })

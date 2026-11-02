@@ -115,6 +115,12 @@ impl IvfIndex {
         })
     }
 
+    /// Dictionary indices in the `probe` clusters nearest to `q`.
+    ///
+    /// Every entry belongs to exactly one cluster and the probed clusters are
+    /// distinct, so the result has no duplicates. The order is by cluster, not
+    /// by index; callers rank the candidates themselves with a total order, so
+    /// the order does not affect the final match.
     pub fn candidates(&self, q: &[u8; IVF_DIMS], probe: usize) -> Vec<u32> {
         let mut scored: Vec<(u32, usize)> = self
             .centroids
@@ -123,12 +129,11 @@ impl IvfIndex {
             .map(|(i, c)| (coarse_score64(q, c), i))
             .collect();
         truncate_top(&mut scored, probe.max(1));
-        let mut out = Vec::new();
+        let total: usize = scored.iter().map(|&(_, c)| self.lists[c].len()).sum();
+        let mut out = Vec::with_capacity(total);
         for (_, cluster) in scored {
             out.extend_from_slice(&self.lists[cluster]);
         }
-        out.sort_unstable();
-        out.dedup();
         out
     }
 

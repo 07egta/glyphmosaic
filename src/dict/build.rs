@@ -46,11 +46,12 @@ pub fn build(opts: &BuildOptions) -> Result<Dictionary> {
     let mut dict = Dictionary::new(header);
 
     for (font_index, loaded) in fontset.fonts.iter().enumerate() {
-        let chars = enumerate_codepoints(&loaded.bytes, opts.include_pua)
+        let chars = enumerate_codepoints(loaded.font.bytes(), opts.include_pua)
             .with_context(|| format!("failed to enumerate {}", loaded.record.path))?;
         if chars.is_empty() {
             bail!("font {} has no usable glyphs", loaded.record.name);
         }
+        let font = loaded.font.get()?;
 
         let bar = ProgressBar::new(chars.len() as u64);
         bar.set_style(
@@ -65,7 +66,7 @@ pub fn build(opts: &BuildOptions) -> Result<Dictionary> {
                 .par_iter()
                 .filter_map(|&c| {
                     bar.inc(1);
-                    let coverage = rasterize_stretched(&loaded.font, c, 128.0)?;
+                    let coverage = rasterize_stretched(font, c, 128.0)?;
                     let max_ink = coverage.data.iter().copied().max().unwrap_or(0);
                     if max_ink < opts.min_ink {
                         return None;
