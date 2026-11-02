@@ -1,0 +1,8 @@
+/target
+/fonts
+/demo
+/out
+*.gmd
+*.tsv
+*.mp4
+.superpowers
