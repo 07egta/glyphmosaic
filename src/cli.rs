@@ -19,7 +19,11 @@ use crate::video::encode::{AudioMode, EncodeOptions, Encoder};
 use crate::video::probe::{probe, validate_input};
 
 #[derive(Parser)]
-#[command(name = "glyphmosaic", version, about = "Turn video frames into a mosaic of Unicode font glyphs")]
+#[command(
+    name = "glyphmosaic",
+    version,
+    about = "Turn video frames into a mosaic of Unicode font glyphs"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -130,7 +134,7 @@ pub fn run() -> Result<()> {
 }
 
 fn parse_grid(s: &str) -> Result<(usize, usize)> {
-    let s = s.replace('×', "x").replace('*', "x").replace('X', "x");
+    let s = s.replace(['×', '*', 'X'], "x");
     let (a, b) = s
         .split_once('x')
         .ok_or_else(|| anyhow::anyhow!("invalid grid '{s}'; expected COLSxROWS like 4x3"))?;
@@ -341,6 +345,9 @@ fn render_impl(job: RenderJob<'_>) -> Result<()> {
         (None, None) => 0,
     };
     let bar = ProgressBar::new(total);
+    if std::env::var_os("GLYPHMOSAIC_NO_PROGRESS").is_some() {
+        bar.set_draw_target(indicatif::ProgressDrawTarget::hidden());
+    }
     bar.set_style(
         ProgressStyle::with_template("{spinner} {pos}/{len} frames")
             .unwrap()
@@ -353,7 +360,7 @@ fn render_impl(job: RenderJob<'_>) -> Result<()> {
     let mut unique_total = 0usize;
     let cells = job.config.grid_cols * job.config.grid_rows;
 
-    while job.limit.map_or(true, |limit| frame_no < limit) {
+    while job.limit.is_none_or(|limit| frame_no < limit) {
         if !reader.read_frame(&mut frame)? {
             break;
         }
@@ -364,7 +371,8 @@ fn render_impl(job: RenderJob<'_>) -> Result<()> {
             job.config.grid_cols,
             job.config.grid_rows,
         )?;
-        let (matches, match_stats) = match_cells(&dict, &queries, job.top_k, job.exact, job.threads);
+        let (matches, match_stats) =
+            match_cells(&dict, &queries, job.top_k, job.exact, job.threads);
         unique_total += match_stats.unique;
 
         for (cell, result) in matches.iter().enumerate() {
@@ -372,7 +380,11 @@ fn render_impl(job: RenderJob<'_>) -> Result<()> {
             let ch = char::from_u32(cp).unwrap_or('\u{FFFD}');
             chars.push(ch);
             if let Some(writer) = &mut dump {
-                let printable = if matches!(ch, '\t' | '\n' | '\r') { ' ' } else { ch };
+                let printable = if matches!(ch, '\t' | '\n' | '\r') {
+                    ' '
+                } else {
+                    ch
+                };
                 writeln!(
                     writer,
                     "{frame_no}\t{cell}\tU+{cp:04X}\t{printable}\t{}\t{}",

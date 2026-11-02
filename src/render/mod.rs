@@ -57,8 +57,8 @@ impl Compositor {
         }
 
         let cell_h = (config.cell_height & !1).max(2);
-        let aspect = (src_w as f64 / config.grid_cols as f64)
-            / (src_h as f64 / config.grid_rows as f64);
+        let aspect =
+            (src_w as f64 / config.grid_cols as f64) / (src_h as f64 / config.grid_rows as f64);
         let cell_w = (((cell_h as f64 * aspect).round() as u32) & !1).max(2);
         let mosaic_w = cell_w * config.grid_cols as u32;
         let mosaic_h = cell_h * config.grid_rows as u32;
@@ -106,11 +106,7 @@ impl Compositor {
         }
         let expected_cells = self.config.grid_cols * self.config.grid_rows;
         if matches.len() != expected_cells {
-            bail!(
-                "got {} matches, expected {}",
-                matches.len(),
-                expected_cells
-            );
+            bail!("got {} matches, expected {}", matches.len(), expected_cells);
         }
 
         self.canvas.fill(0);
@@ -232,13 +228,7 @@ mod tests {
         };
         let mut c = Compositor::new(cfg, Arc::new(vec![font]), 64, 48).unwrap();
         let frame = vec![0u8; 64 * 48 * 3];
-        let matches = vec![
-            MatchResult {
-                index: 0,
-                mse: 0
-            };
-            12
-        ];
+        let matches = vec![MatchResult { index: 0, mse: 0 }; 12];
         let out = c.compose(&frame, &matches, &dict, 0).unwrap();
         assert_eq!(out.len(), 96 * 72 * 3);
         assert!(out.chunks(3).any(|p| p[0] > 0));

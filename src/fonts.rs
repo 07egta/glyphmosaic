@@ -174,9 +174,9 @@ fn expand_one(pattern: &str, out: &mut Vec<PathBuf>) -> Result<()> {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
     if parent.exists() {
-        for entry in std::fs::read_dir(parent).with_context(|| {
-            format!("failed to read directory {}", parent.display())
-        })? {
+        for entry in std::fs::read_dir(parent)
+            .with_context(|| format!("failed to read directory {}", parent.display()))?
+        {
             let entry = entry?;
             if wildcard_match(&file_pattern, &entry.file_name().to_string_lossy()) {
                 out.push(entry.path());

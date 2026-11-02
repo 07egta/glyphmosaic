@@ -3,6 +3,7 @@ use crate::imageops::resize_bilinear_rgb;
 use crate::matching::MatchResult;
 use crate::render::text::{draw_text, text_width};
 
+#[allow(clippy::too_many_arguments)]
 fn fill_rect(canvas: &mut [u8], cw: u32, ch: u32, x: u32, y: u32, w: u32, h: u32, color: [u8; 3]) {
     for py in y..(y + h).min(ch) {
         for px in x..(x + w).min(cw) {
@@ -83,9 +84,7 @@ pub fn draw_panel(
             scale -= 1;
         }
         let tx = x + (i as u32 % cols) * col_w + 4;
-        let ty = start_y
-            + (i as u32 / cols) * line_h
-            + (line_h.saturating_sub(7 * scale)) / 2;
+        let ty = start_y + (i as u32 / cols) * line_h + (line_h.saturating_sub(7 * scale)) / 2;
         draw_text(
             canvas,
             cw,

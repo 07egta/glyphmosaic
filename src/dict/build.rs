@@ -36,11 +36,7 @@ pub fn build(opts: &BuildOptions) -> Result<Dictionary> {
         cell_feature: 16,
         coarse_feature: 4,
         unicode_version: "17.0".to_string(),
-        fonts: fontset
-            .fonts
-            .iter()
-            .map(|f| f.record.clone())
-            .collect(),
+        fonts: fontset.fonts.iter().map(|f| f.record.clone()).collect(),
     };
     let mut dict = Dictionary::new(header);
 

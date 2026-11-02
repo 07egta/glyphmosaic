@@ -26,6 +26,8 @@ pub struct Dictionary {
     pub font_indices: Vec<u16>,
     pub full: Vec<[u8; 256]>,
     pub coarse: Vec<[u8; 16]>,
+    /// Runtime-only 8×8 downsample of `full`, used by the middle match stage.
+    pub coarse8: Vec<[u8; 64]>,
 }
 
 impl Dictionary {
@@ -36,6 +38,7 @@ impl Dictionary {
             font_indices: Vec::new(),
             full: Vec::new(),
             coarse: Vec::new(),
+            coarse8: Vec::new(),
         }
     }
 
@@ -50,6 +53,7 @@ impl Dictionary {
     pub fn push(&mut self, cp: char, font_index: u16, full: [u8; 256], coarse: [u8; 16]) {
         self.codepoints.push(cp as u32);
         self.font_indices.push(font_index);
+        self.coarse8.push(crate::raster::coarse8_from_full(&full));
         self.full.push(full);
         self.coarse.push(coarse);
     }
@@ -118,6 +122,7 @@ impl Dictionary {
         dict.font_indices.reserve(count);
         dict.full.reserve(count);
         dict.coarse.reserve(count);
+        dict.coarse8.reserve(count);
         for _ in 0..count {
             let cp = read_u32(&mut input)?;
             let font_index = read_u16(&mut input)?;
@@ -128,6 +133,7 @@ impl Dictionary {
             input.read_exact(&mut coarse)?;
             dict.codepoints.push(cp);
             dict.font_indices.push(font_index);
+            dict.coarse8.push(crate::raster::coarse8_from_full(&full));
             dict.full.push(full);
             dict.coarse.push(coarse);
         }

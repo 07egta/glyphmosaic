@@ -41,8 +41,7 @@ pub fn queries_from_rgb(
                 let src = &small[start..start + FEATURE_SIDE];
                 cell.data[y * FEATURE_SIDE..(y + 1) * FEATURE_SIDE].copy_from_slice(src);
             }
-            let (full, coarse) =
-                features_from_coverage(&cell).unwrap_or(([0u8; 256], [0u8; 16]));
+            let (full, coarse) = features_from_coverage(&cell).unwrap_or(([0u8; 256], [0u8; 16]));
             out.push(Query { full, coarse });
         }
     }

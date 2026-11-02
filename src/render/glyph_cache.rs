@@ -13,12 +13,7 @@ pub struct GlyphCache {
 }
 
 impl GlyphCache {
-    pub fn new(
-        fonts: Arc<Vec<fontdue::Font>>,
-        cell_w: u32,
-        cell_h: u32,
-        max_mb: usize,
-    ) -> Self {
+    pub fn new(fonts: Arc<Vec<fontdue::Font>>, cell_w: u32, cell_h: u32, max_mb: usize) -> Self {
         let cell_px = (cell_w as usize * cell_h as usize).max(1);
         let entries = (max_mb * 1024 * 1024 / cell_px).max(1);
         Self {
@@ -36,8 +31,8 @@ impl GlyphCache {
         let font = self.fonts.get(font_index as usize).ok_or_else(|| {
             anyhow::anyhow!("dictionary references missing font index {font_index}")
         })?;
-        let ch = char::from_u32(cp)
-            .ok_or_else(|| anyhow::anyhow!("invalid codepoint U+{cp:04X}"))?;
+        let ch =
+            char::from_u32(cp).ok_or_else(|| anyhow::anyhow!("invalid codepoint U+{cp:04X}"))?;
         let (metrics, bitmap) = font.rasterize(ch, self.cell_h as f32);
         if metrics.width == 0 || metrics.height == 0 {
             bail!("glyph U+{cp:04X} has no outline");
@@ -47,8 +42,7 @@ impl GlyphCache {
         let mut cropped = Coverage::new(w, h);
         for row in 0..h {
             let start = (y + row) * metrics.width + x;
-            cropped.data[row * w..(row + 1) * w]
-                .copy_from_slice(&bitmap[start..start + w]);
+            cropped.data[row * w..(row + 1) * w].copy_from_slice(&bitmap[start..start + w]);
         }
         let stretched = stretch_coverage(&cropped, self.cell_w as usize, self.cell_h as usize);
         let arc = Arc::new(stretched.data);

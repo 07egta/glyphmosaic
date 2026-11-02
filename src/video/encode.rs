@@ -27,9 +27,9 @@ pub fn mp4_audio_copy_supported(codec: &str) -> bool {
 
 pub fn validate_audio_copy(codec: Option<&str>) -> Result<()> {
     match codec {
-        Some(c) if !mp4_audio_copy_supported(c) => bail!(
-            "audio codec {c} cannot be copied into MP4; use --audio aac"
-        ),
+        Some(c) if !mp4_audio_copy_supported(c) => {
+            bail!("audio codec {c} cannot be copied into MP4; use --audio aac")
+        }
         _ => Ok(()),
     }
 }
@@ -61,14 +61,7 @@ impl Encoder {
 
         let mut cmd = Command::new("ffmpeg");
         cmd.args([
-            "-v",
-            "error",
-            "-y",
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "rgb24",
-            "-s",
+            "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s",
         ])
         .arg(format!("{width}x{height}"))
         .args(["-r"])
@@ -80,15 +73,9 @@ impl Encoder {
             cmd.args(["-map", "0:v:0", "-map", "1:a:0?"]);
         }
 
-        cmd.args([
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-        ])
-        .arg(opts.crf.to_string())
-        .args(["-pix_fmt", "yuv420p"]);
+        cmd.args(["-c:v", "libx264", "-preset", "veryfast", "-crf"])
+            .arg(opts.crf.to_string())
+            .args(["-pix_fmt", "yuv420p"]);
 
         match opts.audio {
             AudioMode::Aac => {

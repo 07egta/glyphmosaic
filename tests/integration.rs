@@ -154,8 +154,7 @@ fn missing_font_reports_fix() {
         false,
         1,
     )
-    .err()
-    .expect("expected an error")
+    .expect_err("expected an error")
     .to_string();
     assert!(err.contains("--fonts"), "unexpected error: {err}");
 }

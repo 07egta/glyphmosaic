@@ -30,16 +30,13 @@ pub fn compute(codepoints: impl IntoIterator<Item = char>) -> Stats {
         total_picks,
         distinct_chars,
         singleton_chars,
-        top: top
-            .into_iter()
-            .map(|(c, n)| (c.to_string(), n))
-            .collect(),
+        top: top.into_iter().map(|(c, n)| (c.to_string(), n)).collect(),
     }
 }
 
 pub fn write_json(path: &Path, stats: &Stats) -> Result<()> {
-    let mut file = File::create(path)
-        .with_context(|| format!("failed to create {}", path.display()))?;
+    let mut file =
+        File::create(path).with_context(|| format!("failed to create {}", path.display()))?;
     serde_json::to_writer_pretty(&mut file, stats)?;
     writeln!(file)?;
     Ok(())
@@ -60,7 +57,11 @@ fn commas(n: u64) -> String {
 pub fn format_report(stats: &Stats) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "Total picks: {}", commas(stats.total_picks));
-    let _ = writeln!(out, "Distinct characters: {}", commas(stats.distinct_chars as u64));
+    let _ = writeln!(
+        out,
+        "Distinct characters: {}",
+        commas(stats.distinct_chars as u64)
+    );
     let _ = writeln!(
         out,
         "Characters used once: {}",
@@ -87,14 +88,12 @@ pub fn parse_codepoint(s: &str) -> Result<char> {
         .or_else(|| s.strip_prefix("0x"))
         .or_else(|| s.strip_prefix("0X"))
         .unwrap_or(s);
-    let cp = u32::from_str_radix(hex, 16)
-        .with_context(|| format!("invalid codepoint: {s}"))?;
+    let cp = u32::from_str_radix(hex, 16).with_context(|| format!("invalid codepoint: {s}"))?;
     char::from_u32(cp).ok_or_else(|| anyhow::anyhow!("invalid Unicode scalar: {s}"))
 }
 
 pub fn read_tsv(path: &Path) -> Result<Vec<char>> {
-    let file = File::open(path)
-        .with_context(|| format!("failed to open {}", path.display()))?;
+    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let reader = BufReader::new(file);
     let mut out = Vec::new();
     for (line_no, line) in reader.lines().enumerate() {

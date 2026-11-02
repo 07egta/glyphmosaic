@@ -34,14 +34,7 @@ fn area_weights(src_len: usize, dst_len: usize) -> Vec<Vec<(usize, f64)>> {
 
 /// Area-average downscale (box filter). Works for upscale too, where it
 /// degenerates to a nearest-ish sample.
-pub fn resize_area_gray(
-    src: &[u8],
-    sw: usize,
-    sh: usize,
-    dst: &mut [u8],
-    dw: usize,
-    dh: usize,
-) {
+pub fn resize_area_gray(src: &[u8], sw: usize, sh: usize, dst: &mut [u8], dw: usize, dh: usize) {
     assert_eq!(src.len(), sw * sh);
     assert_eq!(dst.len(), dw * dh);
     let xw = area_weights(sw, dw);
@@ -108,14 +101,7 @@ pub fn resize_bilinear_gray(
     }
 }
 
-pub fn resize_bilinear_rgb(
-    src: &[u8],
-    sw: usize,
-    sh: usize,
-    dst: &mut [u8],
-    dw: usize,
-    dh: usize,
-) {
+pub fn resize_bilinear_rgb(src: &[u8], sw: usize, sh: usize, dst: &mut [u8], dw: usize, dh: usize) {
     assert_eq!(src.len(), sw * sh * 3);
     assert_eq!(dst.len(), dw * dh * 3);
     let xs = bilinear_axis(sw, dw);

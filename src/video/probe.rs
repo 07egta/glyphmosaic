@@ -127,8 +127,8 @@ pub fn probe(path: &Path) -> Result<VideoInfo> {
         })
         .unwrap_or((30, 1));
 
-    let duration = parse_f64(video.get("duration"))
-        .or_else(|| parse_f64(json.pointer("/format/duration")));
+    let duration =
+        parse_f64(video.get("duration")).or_else(|| parse_f64(json.pointer("/format/duration")));
     let mut frame_count = parse_u64(video.get("nb_frames"));
     if frame_count.is_none() {
         if let Some(d) = duration {
@@ -175,7 +175,11 @@ pub fn validate_input(info: &VideoInfo) -> Result<()> {
         info.color_transfer.as_deref(),
         Some("smpte2084") | Some("arib-std-b67")
     );
-    if hdr || pix.contains("10le") || pix.contains("10be") || pix.contains("12") || pix.contains("p010")
+    if hdr
+        || pix.contains("10le")
+        || pix.contains("10be")
+        || pix.contains("12")
+        || pix.contains("p010")
     {
         bail!("HDR/10-bit input is not supported; convert to 8-bit SDR first");
     }
@@ -261,7 +265,10 @@ mod tests {
             sar_den: 1,
             rotation: 0,
         };
-        assert!(validate_input(&info).unwrap_err().to_string().contains("10-bit"));
+        assert!(validate_input(&info)
+            .unwrap_err()
+            .to_string()
+            .contains("10-bit"));
         info.pix_fmt = "yuv420p".into();
         info.field_order = "tt".into();
         assert!(validate_input(&info)

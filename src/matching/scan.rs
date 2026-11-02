@@ -1,40 +1,59 @@
-use std::collections::BinaryHeap;
-
-use super::simd::{coarse_score, full_score};
+use super::simd::{coarse_score, coarse_score64, full_score};
 use super::{MatchResult, Query};
 use crate::dict::Dictionary;
+use crate::raster::coarse8_from_full;
 
-/// Return the `top_k` best `(mse, index)` candidates by coarse score,
-/// sorted by `(mse, index)`.
+/// Number of coarse candidates kept before the 8×8 rescore.
+const COARSE_CANDIDATES: usize = 32_768;
+/// Number of 8×8 candidates kept before the full 16×16 rescore.
+const MID_CANDIDATES: usize = 1_024;
+
+fn truncate_top(scored: &mut Vec<(u32, usize)>, top_k: usize) {
+    let k = top_k.max(1).min(scored.len());
+    if k < scored.len() {
+        scored.select_nth_unstable_by(k - 1, |a, b| a.cmp(b));
+        scored.truncate(k);
+    }
+    scored.sort_unstable();
+}
+
+/// Return the `top_k` best `(mse, index)` candidates by coarse score.
 pub fn scan_coarse(dict: &Dictionary, q: &[u8; 16], top_k: usize) -> Vec<(u32, usize)> {
     if dict.is_empty() {
         return Vec::new();
     }
-    let k = top_k.max(1).min(dict.len());
-    let mut heap: BinaryHeap<(u32, usize)> = BinaryHeap::with_capacity(k + 1);
-    for (index, glyph) in dict.coarse.iter().enumerate() {
-        let score = coarse_score(q, glyph);
-        if heap.len() < k {
-            heap.push((score, index));
-        } else if let Some(&worst) = heap.peek() {
-            if (score, index) < worst {
-                heap.pop();
-                heap.push((score, index));
-            }
-        }
-    }
-    let mut out = heap.into_vec();
-    out.sort_unstable();
-    out
+    let mut scored: Vec<(u32, usize)> = dict
+        .coarse
+        .iter()
+        .enumerate()
+        .map(|(index, glyph)| (coarse_score(q, glyph), index))
+        .collect();
+    truncate_top(&mut scored, top_k);
+    scored
+}
+
+/// Rescore coarse candidates at 8×8 and keep the best `top_k`.
+pub fn refine_mid(
+    dict: &Dictionary,
+    q: &[u8; 64],
+    candidates: &[(u32, usize)],
+    top_k: usize,
+) -> Vec<(u32, usize)> {
+    let mut scored: Vec<(u32, usize)> = candidates
+        .iter()
+        .filter(|&&(_, index)| index < dict.len())
+        .map(|&(_, index)| {
+            let glyph8 = &dict.coarse8[index];
+            (coarse_score64(q, glyph8), index)
+        })
+        .collect();
+    truncate_top(&mut scored, top_k);
+    scored
 }
 
 /// Rescore candidates at full resolution and return `(index, mse)`.
 /// With an empty candidate list, scan the whole dictionary.
-pub fn refine_full(
-    dict: &Dictionary,
-    q: &[u8; 256],
-    candidates: &[(u32, usize)],
-) -> (usize, u32) {
+pub fn refine_full(dict: &Dictionary, q: &[u8; 256], candidates: &[(u32, usize)]) -> (usize, u32) {
     if dict.is_empty() {
         return (0, u32::MAX);
     }
@@ -74,8 +93,10 @@ pub fn match_one(dict: &Dictionary, q: &Query, top_k: usize, exact: bool) -> Mat
     let (index, mse) = if exact {
         refine_full(dict, &q.full, &[])
     } else {
-        let candidates = scan_coarse(dict, &q.coarse, top_k);
-        refine_full(dict, &q.full, &candidates)
+        let coarse = scan_coarse(dict, &q.coarse, COARSE_CANDIDATES);
+        let q8 = coarse8_from_full(&q.full);
+        let mid = refine_mid(dict, &q8, &coarse, top_k.max(MID_CANDIDATES));
+        refine_full(dict, &q.full, &mid)
     };
     MatchResult { index, mse }
 }
@@ -97,8 +118,8 @@ mod tests {
         for i in 0..entries {
             let mut full = [0u8; 256];
             let mut coarse = [0u8; 16];
-            for j in 0..256 {
-                full[j] = ((i * 37 + j * 11) % 256) as u8;
+            for (j, v) in full.iter_mut().enumerate() {
+                *v = ((i * 37 + j * 11) % 256) as u8;
             }
             full[0] = (i & 0xFF) as u8;
             full[1] = ((i >> 8) & 0xFF) as u8;
@@ -152,5 +173,19 @@ mod tests {
             };
             assert_eq!(match_one(&d, &q, 64, false).index, i);
         }
+    }
+
+    #[test]
+    fn coarse8_is_block_average() {
+        let mut full = [0u8; 256];
+        for y in 0..16 {
+            for x in 0..16 {
+                full[y * 16 + x] = if x < 8 { 200 } else { 100 };
+            }
+        }
+        let c = coarse8_from_full(&full);
+        assert_eq!(c[0], 200);
+        assert_eq!(c[7], 100);
+        assert_eq!(c[8], 200);
     }
 }

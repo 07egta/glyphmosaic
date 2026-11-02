@@ -22,6 +22,23 @@ impl Coverage {
     }
 }
 
+/// Downsample a 16×16 feature to 8×8 by averaging 2×2 blocks.
+pub fn coarse8_from_full(full: &[u8; FULL_LEN]) -> [u8; 64] {
+    let mut out = [0u8; 64];
+    for cy in 0..8 {
+        for cx in 0..8 {
+            let mut sum = 0u32;
+            for y in 0..2 {
+                for x in 0..2 {
+                    sum += full[(cy * 2 + y) * FEATURE_SIDE + cx * 2 + x] as u32;
+                }
+            }
+            out[cy * 8 + cx] = ((sum + 2) / 4) as u8;
+        }
+    }
+    out
+}
+
 /// Returns `(x, y, width, height)` of the non-zero ink bounding box.
 pub fn crop_ink(data: &[u8], width: usize, height: usize) -> Option<(usize, usize, usize, usize)> {
     assert_eq!(data.len(), width * height);
@@ -50,7 +67,14 @@ pub fn crop_ink(data: &[u8], width: usize, height: usize) -> Option<(usize, usiz
 /// Bilinear stretch of a coverage bitmap into `dw × dh`.
 pub fn stretch_coverage(src: &Coverage, dw: usize, dh: usize) -> Coverage {
     let mut out = Coverage::new(dw, dh);
-    resize_bilinear_gray(src.data.as_slice(), src.width, src.height, &mut out.data, dw, dh);
+    resize_bilinear_gray(
+        src.data.as_slice(),
+        src.width,
+        src.height,
+        &mut out.data,
+        dw,
+        dh,
+    );
     out
 }
 
@@ -112,8 +136,8 @@ mod tests {
     #[test]
     fn crop_trims_transparent_border() {
         let mut b = vec![0u8; 5 * 4];
-        b[1 * 5 + 1] = 255;
-        b[1 * 5 + 2] = 128;
+        b[6] = 255;
+        b[7] = 128;
         assert_eq!(crop_ink(&b, 5, 4), Some((1, 1, 2, 1)));
     }
 

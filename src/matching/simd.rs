@@ -45,6 +45,16 @@ pub fn full_score(q: &[u8; 256], g: &[u8; 256]) -> u32 {
     sum
 }
 
+pub fn coarse_score64(q: &[u8; 64], g: &[u8; 64]) -> u32 {
+    let mut sum = 0u32;
+    for i in 0..4 {
+        let qc: &[u8; 16] = q[i * 16..i * 16 + 16].try_into().unwrap();
+        let gc: &[u8; 16] = g[i * 16..i * 16 + 16].try_into().unwrap();
+        sum += coarse_score(qc, gc);
+    }
+    sum
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,6 +73,13 @@ mod tests {
         g[0] = 3;
         g[255] = 4;
         assert_eq!(full_score(&q, &g), 25);
+    }
+
+    #[test]
+    fn coarse64_matches_hand_calculation() {
+        let q = [10u8; 64];
+        let g = [12u8; 64];
+        assert_eq!(coarse_score64(&q, &g), 256);
     }
 
     #[test]
