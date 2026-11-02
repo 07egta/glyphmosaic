@@ -2,6 +2,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod cli;
 pub mod error;
+pub mod imageops;
+pub mod raster;
 
 #[cfg(test)]
 #[allow(dead_code)]
