@@ -8,6 +8,7 @@ pub mod frame;
 pub mod imageops;
 pub mod matching;
 pub mod raster;
+pub mod render;
 pub mod video;
 
 #[cfg(test)]
