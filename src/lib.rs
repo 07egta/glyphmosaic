@@ -7,6 +7,7 @@ pub mod fonts;
 pub mod imageops;
 pub mod matching;
 pub mod raster;
+pub mod video;
 
 #[cfg(test)]
 #[allow(dead_code)]
