@@ -1,7 +1,9 @@
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod cli;
+pub mod dict;
 pub mod error;
+pub mod fonts;
 pub mod imageops;
 pub mod raster;
 
