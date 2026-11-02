@@ -66,7 +66,13 @@ pub fn draw_panel(
     if matches.is_empty() {
         return;
     }
-    let cols = 2u32;
+    let cols = if matches.len() <= 12 {
+        2u32
+    } else if matches.len() <= 48 {
+        3u32
+    } else {
+        4u32
+    };
     let rows = (matches.len() as u32).div_ceil(cols);
     let start_y = y + prev_h + 10;
     let available = (y + h).saturating_sub(start_y + 6);

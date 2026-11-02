@@ -5,6 +5,7 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
 use crate::fonts::FontRecord;
+use crate::matching::ivf::{index_path, IvfIndex};
 
 pub const MAGIC: &[u8; 4] = b"GMD1";
 pub const VERSION: u32 = 1;
@@ -65,6 +66,8 @@ pub struct Dictionary {
     pub coarse: Vec<[u8; 16]>,
     /// Runtime-only 8×8 downsample of `full`, used by the middle match stage.
     pub coarse8: Vec<[u8; 64]>,
+    /// Optional IVF index loaded from `<dict>.idx`; `None` means full scan.
+    pub index: Option<IvfIndex>,
 }
 
 impl Dictionary {
@@ -76,6 +79,7 @@ impl Dictionary {
             full: Vec::new(),
             coarse: Vec::new(),
             coarse8: Vec::new(),
+            index: None,
         }
     }
 
@@ -192,6 +196,7 @@ impl Dictionary {
         if input.read(&mut extra)? != 0 {
             bail!("dictionary has trailing bytes after {count} entries");
         }
+        dict.index = IvfIndex::read(&index_path(path), dict.len()).ok();
         Ok(dict)
     }
 }

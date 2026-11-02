@@ -31,6 +31,10 @@ cargo run --release -- dict build --fonts "fonts/*.ttf" "fonts/*.otf" --out font
 cargo run --release -- render -i input.mp4 -d fonts.gmd -o output.mp4 `
   --grid 4x3 --layout panel --cell-height 360
 
+# Or specify a character count; the grid follows the source aspect.
+cargo run --release -- render -i input.mp4 -d fonts.gmd -o output.mp4 `
+  --chars 48 --layout panel --cell-height 180 --encoder qsv
+
 # 4. Print the stats for that run.
 cargo run --release -- report output.codepoints.tsv
 ```
@@ -56,9 +60,11 @@ cargo run --release -- render -i input.mp4 -d fonts.gmd -o output.mp4 `
 3. **Matching.** A 4×4 coarse scan keeps the best 32,768 candidates; an 8×8
    rescore keeps `--top-k` (default 1,024); those are rescored at 16×16 with
    integer MSE. Ties break by dictionary index, so results are deterministic.
-   On a 60-frame sample (720 cells) this matched the exhaustive `--exact`
-   result 100% of the time. `--exact` skips the staged passes and scans the
-   full 16×16 feature for every entry.
+   For large dictionaries `dict build` also writes a 4,096-cluster IVF index
+   (`fonts.gmd.idx`) over the 8×8 features; a render probes the nearest 128
+   clusters and skips the full 4×4 scan. On a 60-frame sample (720 cells) this
+   matched the exhaustive `--exact` result 100% of the time. `--exact` skips
+   every staged pass and scans the full 16×16 feature for every entry.
 4. **Rendering.** Chosen glyphs are re-rasterized from the original font at the
    output cell size (LRU cached), tiled into a mosaic, and — in `panel` mode —
    paired with the source frame and a `U+XXXX` list on the right.
@@ -77,10 +83,12 @@ Release build, Intel Core Ultra 7 258V (8 threads), dictionary above:
 
 | Step | Result |
 |---|---|
-| Dictionary build (9 fonts) | ~10.5 s warm, 59 MB `.gmd` |
-| Matching, 300 frames at 4×3 (3,600 cells) | ~6 s (plus ~8 s startup) |
-| Projected 6,955 frames (83,460 cells) | ~2.3 min |
-| Demo: 10 s 640×480 → 1920×1080 with panel + AAC | 16.7 s |
+| Dictionary build (9 fonts + IVF index) | ~9 s warm, 59 MB `.gmd` + 0.7 MB `.idx` |
+| Matching, 300 frames at 4×3 (3,600 cells) | ~0.9 s (plus ~3–8 s startup) |
+| Projected 6,955 frames (83,460 cells) | ~20 s |
+| 1080p 4×3 panel + AAC | faster than real-time |
+| 1080p 48 chars (8×6) panel + AAC, 10 s | 9.3 s |
+| 144 chars (12×12), 1316×990 + AAC, 10 s | 8.3 s |
 | `--exact` on 60 frames (720 cells) | ~3.3 s after startup |
 
 The 30 MB `Jigmo.ttf`, 35 MB `Jigmo2.ttf`, and 7.5 MB `Jigmo3.ttf` (plus the
@@ -108,12 +116,12 @@ glyphmosaic dict build --fonts <glob>... --out <file.gmd>
     [--include-pua] [--min-ink 1] [--jobs N] [--font-root DIR]
 
 glyphmosaic render -i <video> -d <file.gmd> -o <out.mp4>
-    [--grid 4x3] [--layout mosaic|panel] [--cell-height 240]
+    [--grid 4x3 | --chars N] [--layout mosaic|panel] [--cell-height 240]
     [--panel-width 480] [--top-k 1024] [--exact]
     [--fonts <glob>...] [--font-root DIR]
     [--dump-codepoints <file.tsv>] [--stats <file.json>]
-    [--audio aac|copy|none] [--crf 18] [--limit N] [--threads N]
-    [--cache-mb 512] [--no-encode]
+    [--audio aac|copy|none] [--encoder auto|libx264|qsv] [--crf 18]
+    [--limit N] [--threads N] [--cache-mb 512] [--no-encode]
 
 glyphmosaic inspect <file.gmd>
 glyphmosaic report <codepoints.tsv>
@@ -121,10 +129,17 @@ glyphmosaic report <codepoints.tsv>
 
 - `--layout panel` uses a 4:3 mosaic plus a 480×1080 side panel at
   `--cell-height 360` (1920×1080 total).
+- `--chars N` picks `cols×rows` from the source aspect; `--grid` overrides it.
+- `--encoder auto` uses `h264_qsv` when ffmpeg exposes it, otherwise libx264.
+  Use `--encoder libx264` for portability or `--encoder qsv` to force Intel
+  Quick Sync.
+- `dict build` writes `<dict>.idx` for large dictionaries; renders use the
+  4,096-cluster index automatically when present, and fall back to the 4×4
+  full scan when it is absent.
 - `--no-encode` only matches and reports; useful for timing.
 - `--exact` is faithful to the original "scan every glyph" description but
-  much slower; the default coarse-to-fine path is visually equivalent in
-  practice.
+  much slower; the default IVF + staged path matched it 100% on a 720-cell
+  sample.
 - `--audio copy` refuses codecs that MP4 cannot carry and tells you to use
   `--audio aac`.
 

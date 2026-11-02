@@ -3,6 +3,7 @@
 /demo
 /out
 *.gmd
+*.gmd.idx
 *.tsv
 *.mp4
 .superpowers

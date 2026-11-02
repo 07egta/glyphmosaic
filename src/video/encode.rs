@@ -2,6 +2,14 @@ use anyhow::{bail, Context, Result};
 use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::OnceLock;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EncoderKind {
+    Auto,
+    X264,
+    Qsv,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AudioMode {
@@ -16,6 +24,18 @@ pub struct EncodeOptions {
     pub audio: AudioMode,
     pub fps_num: u32,
     pub fps_den: u32,
+    pub encoder: EncoderKind,
+}
+
+fn qsv_available() -> bool {
+    static QSV: OnceLock<bool> = OnceLock::new();
+    *QSV.get_or_init(|| {
+        Command::new("ffmpeg")
+            .args(["-hide_banner", "-encoders"])
+            .output()
+            .map(|out| String::from_utf8_lossy(&out.stdout).contains("h264_qsv"))
+            .unwrap_or(false)
+    })
 }
 
 pub fn mp4_audio_copy_supported(codec: &str) -> bool {
@@ -74,9 +94,28 @@ impl Encoder {
             cmd.args(["-map", "0:v:0", "-map", "1:a:0?"]);
         }
 
-        cmd.args(["-c:v", "libx264", "-preset", "veryfast", "-crf"])
-            .arg(opts.crf.to_string())
-            .args(["-pix_fmt", "yuv420p"]);
+        let encoder = match opts.encoder {
+            EncoderKind::Auto => {
+                if qsv_available() {
+                    EncoderKind::Qsv
+                } else {
+                    EncoderKind::X264
+                }
+            }
+            other => other,
+        };
+        match encoder {
+            EncoderKind::X264 | EncoderKind::Auto => {
+                cmd.args(["-c:v", "libx264", "-preset", "veryfast", "-crf"])
+                    .arg(opts.crf.to_string());
+            }
+            EncoderKind::Qsv => {
+                cmd.args(["-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality"])
+                    .arg(opts.crf.to_string())
+                    .args(["-look_ahead", "0"]);
+            }
+        }
+        cmd.args(["-pix_fmt", "yuv420p"]);
 
         match opts.audio {
             AudioMode::Aac => {
@@ -195,6 +234,7 @@ mod tests {
             audio: AudioMode::None,
             fps_num: 10,
             fps_den: 1,
+            encoder: EncoderKind::X264,
         };
         let mut enc = Encoder::new(&out, &input, 64, 48, &opts).unwrap();
         for _ in 0..5 {

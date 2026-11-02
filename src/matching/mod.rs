@@ -1,3 +1,4 @@
+pub mod ivf;
 pub mod scan;
 pub mod simd;
 

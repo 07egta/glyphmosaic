@@ -15,7 +15,7 @@ use crate::matching::match_cells;
 use crate::render::{Compositor, Layout, RenderConfig};
 use crate::stats;
 use crate::video::decode::FrameReader;
-use crate::video::encode::{AudioMode, EncodeOptions, Encoder};
+use crate::video::encode::{AudioMode, EncodeOptions, Encoder, EncoderKind};
 use crate::video::probe::{probe, validate_input};
 
 #[derive(Parser)]
@@ -29,6 +29,7 @@ struct Cli {
     command: Command,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
     /// Build and inspect the font glyph dictionary.
@@ -79,6 +80,14 @@ enum AudioArg {
     None,
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum EncoderArg {
+    Auto,
+    #[value(name = "libx264")]
+    Libx264,
+    Qsv,
+}
+
 #[derive(Args)]
 struct RenderArgs {
     #[arg(short, long)]
@@ -89,6 +98,9 @@ struct RenderArgs {
     out: Option<PathBuf>,
     #[arg(long, default_value = "4x3")]
     grid: String,
+    /// Target number of characters per frame; chooses cols×rows automatically.
+    #[arg(long, conflicts_with = "grid")]
+    chars: Option<usize>,
     #[arg(long, value_enum, default_value_t = LayoutArg::Mosaic)]
     layout: LayoutArg,
     #[arg(long, default_value_t = 240)]
@@ -109,6 +121,8 @@ struct RenderArgs {
     stats: Option<PathBuf>,
     #[arg(long, value_enum, default_value_t = AudioArg::Aac)]
     audio: AudioArg,
+    #[arg(long, value_enum, default_value_t = EncoderArg::Auto)]
+    encoder: EncoderArg,
     #[arg(long, default_value_t = 18)]
     crf: u8,
     #[arg(long)]
@@ -131,6 +145,24 @@ pub fn run() -> Result<()> {
         Command::Inspect { dict } => inspect(&dict),
         Command::Report { codepoints } => report(&codepoints),
     }
+}
+
+fn grid_for_chars(n: usize, src_w: u32, src_h: u32) -> (usize, usize) {
+    if n == 0 || src_w == 0 || src_h == 0 {
+        return (1, 1);
+    }
+    let target = src_w as f64 / src_h as f64;
+    let mut best = (1usize, n, f64::INFINITY);
+    for cols in 1..=n {
+        let rows = n.div_ceil(cols);
+        let ratio = cols as f64 / rows as f64;
+        let extra = (cols * rows - n) as f64 * 10.0;
+        let score = (ratio - target).abs() + extra;
+        if score < best.2 {
+            best = (cols, rows, score);
+        }
+    }
+    (best.0, best.1)
 }
 
 fn parse_grid(s: &str) -> Result<(usize, usize)> {
@@ -177,6 +209,24 @@ fn build_dict(args: DictBuildArgs) -> Result<()> {
     };
     let dict = build::build(&opts)?;
     dict.write(&args.out)?;
+    if dict.len() >= 20_000 {
+        let idx = crate::matching::ivf::IvfIndex::train(
+            &dict,
+            crate::matching::ivf::IVF_K,
+            6,
+            args.jobs,
+        )?;
+        let idx_path = crate::matching::ivf::index_path(&args.out);
+        idx.write(&idx_path)?;
+        println!(
+            "wrote {} ({} clusters, {} bytes)",
+            idx_path.display(),
+            idx.k,
+            std::fs::metadata(&idx_path)?.len()
+        );
+    } else {
+        println!("skipped IVF index: dictionary is too small to benefit");
+    }
     let size = std::fs::metadata(&args.out)?.len();
     println!(
         "wrote {} ({} entries, {} bytes)",
@@ -209,6 +259,14 @@ fn inspect(path: &Path) -> Result<()> {
     );
     println!("entries: {}", dict.len());
     println!("distinct codepoints: {}", unique.len());
+    match &dict.index {
+        Some(idx) => println!(
+            "ivf index: {} clusters, {} entries",
+            idx.k,
+            idx.assigns.len()
+        ),
+        None => println!("ivf index: none (full 4x4 scan)"),
+    }
     println!("fonts:");
     for f in &dict.header.fonts {
         println!("  {}  {}  {}", f.name, f.sha256, f.path);
@@ -224,7 +282,11 @@ fn report(path: &Path) -> Result<()> {
 }
 
 fn render_command(args: RenderArgs) -> Result<()> {
-    let (cols, rows) = parse_grid(&args.grid)?;
+    let (cols, rows) = if args.chars.is_some() {
+        (1, 1)
+    } else {
+        parse_grid(&args.grid)?
+    };
     let layout = match args.layout {
         LayoutArg::Mosaic => Layout::Mosaic,
         LayoutArg::Panel => Layout::Panel,
@@ -233,6 +295,11 @@ fn render_command(args: RenderArgs) -> Result<()> {
         AudioArg::Aac => AudioMode::Aac,
         AudioArg::Copy => AudioMode::Copy,
         AudioArg::None => AudioMode::None,
+    };
+    let encoder = match args.encoder {
+        EncoderArg::Auto => EncoderKind::Auto,
+        EncoderArg::Libx264 => EncoderKind::X264,
+        EncoderArg::Qsv => EncoderKind::Qsv,
     };
     let config = RenderConfig {
         grid_cols: cols,
@@ -247,12 +314,14 @@ fn render_command(args: RenderArgs) -> Result<()> {
         dict_path: &args.dict,
         out: args.out.as_deref(),
         config,
+        chars: args.chars,
         top_k: args.top_k,
         exact: args.exact,
         threads: args.threads,
         fonts: &args.fonts,
         font_root: args.font_root.as_deref(),
         audio,
+        encoder,
         crf: args.crf,
         limit: args.limit,
         dump: args.dump_codepoints.as_deref(),
@@ -277,12 +346,14 @@ pub fn render_for_test(
         dict_path,
         out: Some(out),
         config,
+        chars: None,
         top_k,
         exact,
         threads: 0,
         fonts: &no_fonts,
         font_root: None,
         audio: AudioMode::Aac,
+        encoder: EncoderKind::Auto,
         crf: 18,
         limit: Some(limit),
         dump: None,
@@ -296,12 +367,14 @@ struct RenderJob<'a> {
     dict_path: &'a Path,
     out: Option<&'a Path>,
     config: RenderConfig,
+    chars: Option<usize>,
     top_k: usize,
     exact: bool,
     threads: usize,
     fonts: &'a [String],
     font_root: Option<&'a Path>,
     audio: AudioMode,
+    encoder: EncoderKind,
     crf: u8,
     limit: Option<u64>,
     dump: Option<&'a Path>,
@@ -323,6 +396,12 @@ fn render_impl(job: RenderJob<'_>) -> Result<()> {
     let some_frame_count = info.frame_count;
     let mut reader = FrameReader::open(job.input, info)?;
     let (frame_w, frame_h) = reader.frame_dims();
+    let mut config = job.config;
+    if let Some(chars) = job.chars {
+        let (cols, rows) = grid_for_chars(chars, frame_w, frame_h);
+        config.grid_cols = cols;
+        config.grid_rows = rows;
+    }
 
     let fonts = Arc::new(
         fontset
@@ -331,7 +410,7 @@ fn render_impl(job: RenderJob<'_>) -> Result<()> {
             .map(|f| f.font)
             .collect::<Vec<_>>(),
     );
-    let mut compositor = Compositor::new(job.config, fonts, frame_w, frame_h)?;
+    let mut compositor = Compositor::new(config, fonts, frame_w, frame_h)?;
     let (canvas_w, canvas_h) = compositor.canvas_size();
 
     let mut encoder = if job.no_encode {
@@ -348,6 +427,7 @@ fn render_impl(job: RenderJob<'_>) -> Result<()> {
                 audio: job.audio,
                 fps_num: reader.info.fps_num,
                 fps_den: reader.info.fps_den,
+                encoder: job.encoder,
             },
         )?)
     };
@@ -383,7 +463,7 @@ fn render_impl(job: RenderJob<'_>) -> Result<()> {
     let mut chars = Vec::new();
     let mut frame_no = 0u64;
     let mut unique_total = 0usize;
-    let cells = job.config.grid_cols * job.config.grid_rows;
+    let cells = config.grid_cols * config.grid_rows;
 
     while job.limit.is_none_or(|limit| frame_no < limit) {
         if !reader.read_frame(&mut frame)? {
@@ -393,8 +473,8 @@ fn render_impl(job: RenderJob<'_>) -> Result<()> {
             &frame,
             frame_w as usize,
             frame_h as usize,
-            job.config.grid_cols,
-            job.config.grid_rows,
+            config.grid_cols,
+            config.grid_rows,
         )?;
         let (matches, match_stats) =
             match_cells(&dict, &queries, job.top_k, job.exact, job.threads);
@@ -448,4 +528,17 @@ fn render_impl(job: RenderJob<'_>) -> Result<()> {
         frame_no * cells as u64
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn char_count_picks_sensible_grids() {
+        assert_eq!(grid_for_chars(12, 640, 480), (4, 3));
+        assert_eq!(grid_for_chars(48, 640, 480), (8, 6));
+        assert_eq!(grid_for_chars(144, 640, 480), (12, 12));
+        assert_eq!(grid_for_chars(144, 1920, 1080), (16, 9));
+    }
 }

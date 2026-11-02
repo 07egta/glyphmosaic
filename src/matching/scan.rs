@@ -1,3 +1,4 @@
+use super::ivf::IVF_PROBE;
 use super::simd::{coarse_score, coarse_score64, full_score};
 use super::{MatchResult, Query};
 use crate::dict::Dictionary;
@@ -6,7 +7,7 @@ use crate::raster::coarse8_from_full;
 /// Number of coarse candidates kept before the 8×8 rescore.
 const COARSE_CANDIDATES: usize = 32_768;
 
-fn truncate_top(scored: &mut Vec<(u32, usize)>, top_k: usize) {
+pub(crate) fn truncate_top(scored: &mut Vec<(u32, usize)>, top_k: usize) {
     let k = top_k.max(1).min(scored.len());
     if k < scored.len() {
         scored.select_nth_unstable_by(k - 1, |a, b| a.cmp(b));
@@ -91,8 +92,15 @@ pub fn match_one(dict: &Dictionary, q: &Query, top_k: usize, exact: bool) -> Mat
     let (index, mse) = if exact {
         refine_full(dict, &q.full, &[])
     } else {
-        let coarse = scan_coarse(dict, &q.coarse, COARSE_CANDIDATES);
         let q8 = coarse8_from_full(&q.full);
+        let coarse = match &dict.index {
+            Some(index) if dict.len() >= 20_000 => index
+                .candidates(&q8, IVF_PROBE)
+                .into_iter()
+                .map(|i| (0u32, i as usize))
+                .collect(),
+            _ => scan_coarse(dict, &q.coarse, COARSE_CANDIDATES),
+        };
         let mid = refine_mid(dict, &q8, &coarse, top_k.max(1));
         refine_full(dict, &q.full, &mid)
     };
