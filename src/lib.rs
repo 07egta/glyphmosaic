@@ -11,6 +11,8 @@ pub mod raster;
 pub mod render;
 pub mod video;
 
+pub use dict::Dictionary;
+
 #[cfg(test)]
 #[allow(dead_code)]
 mod test_util;
