@@ -5,9 +5,9 @@ pub fn test_font_path() -> Option<PathBuf> {
         return Some(PathBuf::from(p));
     }
     [
-        "fonts/Jigmo.ttf",
         "C:/Windows/Fonts/arial.ttf",
         "C:/Windows/Fonts/segoeui.ttf",
+        "fonts/Jigmo.ttf",
     ]
     .iter()
     .map(PathBuf::from)

@@ -1,0 +1,38 @@
+﻿{
+    "unifont-17.0.05.otf":  {
+                                "url":  "https://unifoundry.com/pub/unifont/unifont-17.0.05/font-builds/unifont-17.0.05.otf",
+                                "sha256":  "85701ab9b1e251ee16f4df00b13f22eac311d72b7dab427a7d975fe7f5064702"
+                            },
+    "NotoSans-VF.ttf":  {
+                            "url":  "https://raw.githubusercontent.com/google/fonts/6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec/ofl/notosans/NotoSans%5Bwdth,wght%5D.ttf",
+                            "sha256":  "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d"
+                        },
+    "NotoSansSymbols2-Regular.ttf":  {
+                                         "url":  "https://raw.githubusercontent.com/google/fonts/6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec/ofl/notosanssymbols2/NotoSansSymbols2-Regular.ttf",
+                                         "sha256":  "7d5fb73b7ca67a6798101741f5d280a3d016a56a197afcd4199dbb57b4b82a21"
+                                     },
+    "NotoSansMath-Regular.ttf":  {
+                                     "url":  "https://raw.githubusercontent.com/google/fonts/6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec/ofl/notosansmath/NotoSansMath-Regular.ttf",
+                                     "sha256":  "3f495fe933c06786e4d5f6d86b8ee70b6753a68ee3b9d87528726de0f6e2c47d"
+                                 },
+    "NotoSansJP-VF.ttf":  {
+                              "url":  "https://raw.githubusercontent.com/google/fonts/6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf",
+                              "sha256":  "c2f3b4d463500a2ddcd3849cded1fceeb9fd6d1c32e6cbecd568453ba50fc68f"
+                          },
+    "NotoSerifJP-VF.ttf":  {
+                               "url":  "https://raw.githubusercontent.com/google/fonts/6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec/ofl/notoserifjp/NotoSerifJP%5Bwght%5D.ttf",
+                               "sha256":  "2fd527ba12b6a44ec30d796d633360da0aeba6c5d4af1304ce12bb4dc15a7dfc"
+                           },
+    "Jigmo.ttf":  {
+                      "url":  "https://kamichikoichi.github.io/jigmo/Jigmo-20250912.zip",
+                      "sha256":  "c8f295b9bd8f9f117a76b3a454aaaa1bb5b4babc18e254978c6deb88464e40cf"
+                  },
+    "Jigmo2.ttf":  {
+                       "url":  "https://kamichikoichi.github.io/jigmo/Jigmo-20250912.zip",
+                       "sha256":  "5da3582efe77e22073b86b3b86b556d7111148a76b957cfb53318a91da2efff0"
+                   },
+    "Jigmo3.ttf":  {
+                       "url":  "https://kamichikoichi.github.io/jigmo/Jigmo-20250912.zip",
+                       "sha256":  "815b18c1c670103723fe743090559208fdea47dc587ecb057a5a4721ee8dfeff"
+                   }
+}

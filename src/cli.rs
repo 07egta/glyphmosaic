@@ -386,8 +386,11 @@ fn render_impl(job: RenderJob<'_>) -> Result<()> {
             enc.write(canvas)?;
         }
         frame_no += 1;
-        bar.inc(1);
+        if frame_no % 16 == 0 {
+            bar.set_position(frame_no);
+        }
     }
+    bar.set_position(frame_no);
     bar.finish_and_clear();
 
     if let Some(enc) = encoder {
