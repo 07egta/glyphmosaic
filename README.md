@@ -47,6 +47,16 @@ cargo run --release -- render -i input.mp4 -d fonts.gmd -o output.mp4 `
   --dump-codepoints output.codepoints.tsv --stats output.stats.json
 ```
 
+## ブラウザで使う (Web版)
+
+インストール不要。`docs/index.html` をブラウザで開くだけで、
+動画・画像・カメラの映像を実在するUnicode文字のモザイクにできます。
+
+- 文字数スライダー、元映像+文字コードのパネル表示、白黒反転
+- 画像(PNG)保存、録画(WebM)
+- すべて端末内で処理され、映像は外に送られません
+- 文字辞書はその端末のフォントから起動時に作るため、Rust版の固定辞書とは絵柄が少し変わります
+
 ## How it works
 
 1. **Dictionary.** Each font's `cmap` is enumerated and filtered to visible

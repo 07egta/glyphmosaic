@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GlyphMosaic</title>
+<meta name="description" content="映像を、実在するUnicode文字だけで描くブラウザ版ツール">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;900&display=swap">
+<style>
+/* 左: 出力キャンバス / 右: 操作パネル。スマホでは縦に積む */
+:root{
+  --bg:#eceef2; --panel:#ffffff; --ink:#14171f; --muted:#5d6574; --line:#d3d8e0;
+  --accent:#2a3fb5; --accent-ink:#ffffff; --stage:#000; --ok:#14804a; --warn:#b4540a;
+  --f-body:"Zen Kaku Gothic New","Hiragino Sans","Yu Gothic",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e1015; --panel:#171a22; --ink:#e8eaf0; --muted:#98a1b3; --line:#2a2f3b;
+    --accent:#8fa2ff; --accent-ink:#0e1015; --ok:#4fd18b; --warn:#f0a35e; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0e1015; --panel:#171a22; --ink:#e8eaf0; --muted:#98a1b3; --line:#2a2f3b;
+  --accent:#8fa2ff; --accent-ink:#0e1015; --ok:#4fd18b; --warn:#f0a35e; color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 var(--f-body);
+  padding-block:20px 40px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.wrap{max-width:1280px;margin:0 auto;display:grid;gap:16px}
+header{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 16px}
+h1{margin:0;font-weight:900;font-size:clamp(26px,4vw,40px);letter-spacing:.02em;line-height:1.1}
+header p{margin:0;color:var(--muted)}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;align-items:start}
+@media (max-width:880px){.layout{grid-template-columns:minmax(0,1fr)}}
+.stage{position:relative;background:var(--stage);border:1px solid var(--line);border-radius:4px;overflow:hidden;
+  display:flex;align-items:center;justify-content:center;min-height:200px}
+.stage.drag{outline:3px dashed var(--accent);outline-offset:-6px}
+canvas#out{display:block;max-width:100%;height:auto}
+.overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
+  background:rgba(0,0,0,.72);color:#fff;font-size:15px;text-align:center;padding:16px}
+.bar{width:min(320px,80%);height:6px;background:#ffffff33;border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:#fff}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:16px;display:grid;gap:18px;min-width:0}
+.group{display:grid;gap:8px;min-width:0}
+.group>label:not(.check),.group>.lab{font-size:12px;letter-spacing:.08em;color:var(--muted);display:flex;justify-content:space-between;gap:8px}
+.group .val{font-family:var(--f-mono);color:var(--ink);letter-spacing:0}
+.row{display:flex;flex-wrap:wrap;gap:8px}
+button,.btn,select{font:inherit;color:var(--ink);background:transparent;border:1px solid var(--line);border-radius:4px;padding:8px 12px;cursor:pointer;min-height:40px}
+button:hover,.btn:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:500}
+button[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+button.rec.on{background:#c62828;color:#fff;border-color:#c62828}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input[type=range]{width:100%;accent-color:var(--accent)}
+select{width:100%;background:var(--panel)}
+.check{display:flex;align-items:center;gap:8px;min-height:32px;cursor:pointer}
+.check input{width:18px;height:18px;accent-color:var(--accent)}
+.stats{display:flex;flex-wrap:wrap;gap:4px 16px;font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+.note{font-size:12.5px;color:var(--muted);margin:0}
+.msg{font-size:13px;color:var(--warn);min-height:1.2em;margin:0}
+input[type=file]{display:none}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>GlyphMosaic</h1>
+    <p>映像を、実在するUnicode文字だけで描きます。動画・画像・カメラをここに入れるだけ。</p>
+  </header>
+
+  <div class="layout">
+    <div class="stage" id="stage">
+      <canvas id="out" width="960" height="540"></canvas>
+      <div class="overlay" id="overlay"><div id="ovText">文字の辞書を作っています…</div><div class="bar"><i id="ovBar"></i></div></div>
+    </div>
+
+    <div class="panel">
+      <div class="group">
+        <div class="lab">① 映像を選ぶ</div>
+        <div class="row">
+          <button id="bSample" aria-pressed="true">サンプル</button>
+          <label class="btn" for="file" id="bFile" tabindex="0">ファイル</label>
+          <button id="bCam" aria-pressed="false">カメラ</button>
+        </div>
+        <input type="file" id="file" accept="video/*,image/*">
+        <p class="note">動画・画像のファイルは、この枠にドラッグしても入ります。端末の外には送られません。</p>
+        <p class="msg" id="msg" role="status"></p>
+      </div>
+
+      <div class="group">
+        <label for="n">② 文字の数 <span class="val" id="nVal">12</span></label>
+        <input type="range" id="n" min="1" max="100" value="0" step="1">
+        <div class="row" id="presets">
+          <button data-n="12">12 (4×3)</button><button data-n="48">48</button><button data-n="144">144</button><button data-n="400">400</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <label for="dictSel">③ 使う文字の量</label>
+        <select id="dictSel">
+          <option value="small">かんたん（約3千字・速い）</option>
+          <option value="normal" selected>ふつう（約1万字）</option>
+          <option value="large">たくさん（約3万字・漢字とハングル込み）</option>
+        </select>
+        <div class="stats"><span id="dictInfo">辞書 …</span></div>
+      </div>
+
+      <div class="group">
+        <div class="lab">④ 見た目</div>
+        <label class="check"><input type="checkbox" id="panelOn"> 元の映像と文字コードを横に表示</label>
+        <label class="check"><input type="checkbox" id="invert"> 白黒を反転</label>
+        <label class="check"><input type="checkbox" id="contrast" checked> コントラストを自動で整える</label>
+      </div>
+
+      <div class="group">
+        <div class="lab">⑤ 保存</div>
+        <div class="row">
+          <button id="bPause">⏸ 一時停止</button>
+          <button id="bPng">画像で保存</button>
+          <button id="bRec" class="rec">● 録画</button>
+        </div>
+        <p class="note" id="recNote">録画は動画ファイル(WebM)で保存されます。動画は最初から最後まで録画します。重い設定だとコマ落ちするので、文字数を減らすと滑らかです。</p>
+        <div class="stats"><span id="fps">0 fps</span><span id="grid">-</span></div>
+      </div>
+      <p class="note">使われる文字は、この端末に入っているフォントで決まります。端末が違うと絵柄も少し変わります。</p>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const FONT_STACK = '"Hiragino Sans","Yu Gothic","Noto Sans JP","Noto Sans CJK JP","Noto Sans Symbols 2","Noto Sans Symbols","Segoe UI Symbol","Apple Symbols","Arial Unicode MS",system-ui,sans-serif';
+
+/* ---------- 辞書づくり ---------- */
+const SMALL = [[0x21,0x7e],[0xa1,0x24f],[0x370,0x3ff],[0x400,0x4ff],[0x2190,0x23ff],[0x2500,0x27bf],[0x2800,0x28ff],[0x3001,0x303f],[0x3041,0x3096],[0x30a1,0x30fa]];
+const RANGES = {
+  small: SMALL,
+  normal: SMALL.concat([[0x2900,0x2bff],[0x4e00,0x62ff],[0x1d00,0x1dbf],[0x2c00,0x2c5f]]),
+  large: SMALL.concat([[0x2900,0x2bff],[0x4e00,0x9fff],[0xac00,0xd7a3],[0x1d00,0x1dbf],[0x2c00,0x2c5f]])
+};
+const G = Object.assign(document.createElement("canvas"), {width: 96, height: 96});
+const gx = G.getContext("2d", {willReadFrequently: true});
+const T = Object.assign(document.createElement("canvas"), {width: 16, height: 16});
+const tx = T.getContext("2d", {willReadFrequently: true});
+gx.font = "64px " + FONT_STACK; gx.textAlign = "center"; gx.textBaseline = "middle";
+tx.imageSmoothingQuality = "high";
+
+/* 文字を描いて、インクの外枠を返す。インクが無ければ null */
+function inkBox(cp){
+  gx.fillStyle = "#000"; gx.fillRect(0, 0, 96, 96);
+  gx.fillStyle = "#fff"; gx.fillText(String.fromCodePoint(cp), 48, 50);
+  const d = gx.getImageData(0, 0, 96, 96).data;
+  let x0 = 96, x1 = -1, y0 = 96, y1 = -1;
+  for(let y = 0; y < 96; y++){
+    const r = y * 384;
+    for(let x = 0; x < 96; x++){
+      const o = r + x * 4, R = d[o];
+      if(R > 24){
+        // 色つきの絵文字は文字として使わない
+        if(Math.abs(R - d[o + 1]) > 40 || Math.abs(R - d[o + 2]) > 40) return null;
+        if(x < x0) x0 = x; if(x > x1) x1 = x; if(y < y0) y0 = y; if(y > y1) y1 = y; }
+    }
+  }
+  return x1 < 0 ? null : {x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1};
+}
+/* 外枠いっぱいに引き伸ばして16×16にしたときの濃さ */
+function feature16(cp){
+  const b = inkBox(cp); if(!b) return null;
+  tx.fillStyle = "#000"; tx.fillRect(0, 0, 16, 16);
+  tx.drawImage(G, b.x, b.y, b.w, b.h, 0, 0, 16, 16);
+  const d = tx.getImageData(0, 0, 16, 16).data, f = new Uint8Array(256);
+  for(let i = 0; i < 256; i++) f[i] = d[i * 4];
+  return f;
+}
+function hash(f){ let h = 2166136261; for(let i = 0; i < f.length; i++){ h ^= f[i]; h = Math.imul(h, 16777619); } return h >>> 0; }
+function coarseOf(f, out, o){
+  for(let by = 0; by < 4; by++) for(let bx = 0; bx < 4; bx++){
+    let s = 0;
+    for(let y = 0; y < 4; y++) for(let x = 0; x < 4; x++) s += f[(by * 4 + y) * 16 + bx * 4 + x];
+    out[o + by * 4 + bx] = (s + 8) >> 4;
+  }
+}
+const TOFU_CPS = [0x378, 0x5ff, 0xffff, 0x2fffe, 0xe0fff, 0x1fffe, 0x9fff + 0x1000];
+const yieldUI = () => new Promise(r => setTimeout(r, 0));
+
+let dict = null;        // {n, full, coarse, cps}
+let buildToken = 0;
+async function buildDict(kind){
+  const token = ++buildToken;
+  const ranges = RANGES[kind];
+  let total = 0; for(const [a, b] of ranges) total += b - a + 1;
+  const tofu = new Set();
+  for(const cp of TOFU_CPS){ const f = feature16(cp); if(f) tofu.add(hash(f)); }
+  const full = new Uint8Array(total * 256), coarse = new Uint8Array(total * 16), cps = new Int32Array(total);
+  const seen = new Set();
+  let n = 0, done = 0, t0 = performance.now();
+  showOverlay(true, "文字の辞書を作っています…", 0);
+  for(const [a, b] of ranges){
+    for(let cp = a; cp <= b; cp++){
+      done++;
+      const f = feature16(cp);
+      if(f){
+        const h = hash(f);
+        if(!tofu.has(h) && !seen.has(h)){
+          seen.add(h);
+          full.set(f, n * 256); coarseOf(f, coarse, n * 16); cps[n] = cp; n++;
+        }
+      }
+      if((done & 127) === 0 && performance.now() - t0 > 40){
+        showOverlay(true, "文字の辞書を作っています…", done / total);
+        await yieldUI(); t0 = performance.now();
+        if(token !== buildToken) return;
+      }
+    }
+  }
+  if(token !== buildToken) return;
+  dict = {n, full: full.subarray(0, n * 256), coarse: coarse.subarray(0, n * 16), cps: cps.subarray(0, n)};
+  glyphCache.clear();
+  $("dictInfo").textContent = "辞書 " + n.toLocaleString("ja-JP") + " 字";
+  showOverlay(false);
+  dirty = true;
+}
+function showOverlay(on, text, p){
+  $("overlay").hidden = !on;
+  if(text) $("ovText").textContent = text;
+  if(p != null) $("ovBar").style.width = Math.round(p * 100) + "%";
+}
+
+/* ---------- 画面に描く文字（キャッシュ） ---------- */
+const glyphCache = new Map();
+function glyphCanvas(idx){
+  let c = glyphCache.get(idx);
+  if(c) return c;
+  const cp = dict.cps[idx], b = inkBox(cp);
+  c = Object.assign(document.createElement("canvas"), {width: 64, height: 64});
+  const cx = c.getContext("2d"); cx.fillStyle = "#000"; cx.fillRect(0, 0, 64, 64);
+  cx.imageSmoothingQuality = "high";
+  if(b) cx.drawImage(G, b.x, b.y, b.w, b.h, 0, 0, 64, 64);
+  if(glyphCache.size > 6000) glyphCache.clear();
+  glyphCache.set(idx, c);
+  return c;
+}
+
+/* ---------- 映像の入力 ---------- */
+const out = $("out"), octx = out.getContext("2d");
+let src = null, paused = false, dirty = true, camStream = null;
+
+function makeSample(){
+  const c = Object.assign(document.createElement("canvas"), {width: 640, height: 360});
+  const x = c.getContext("2d");
+  return {type: "sample", el: c, w: 640, h: 360, live: true, tick(t){
+    const s = t / 1000;
+    x.fillStyle = "#000"; x.fillRect(0, 0, 640, 360);
+    const g = x.createLinearGradient(0, 0, 640, 0); g.addColorStop(0, "#222"); g.addColorStop(1, "#777");
+    x.fillStyle = g; x.fillRect(0, 300, 640, 60);
+    x.fillStyle = "#fff"; x.beginPath(); x.arc(320 + Math.cos(s * 1.3) * 190, 170 + Math.sin(s * 2.1) * 80, 70, 0, 7); x.fill();
+    x.strokeStyle = "#bbb"; x.lineWidth = 22;
+    for(let i = 0; i < 3; i++){ x.beginPath(); x.arc(320, 180, 60 + i * 55, s + i, s + i + 2.1); x.stroke(); }
+    x.fillStyle = "#fff"; x.font = "900 120px sans-serif"; x.textAlign = "center"; x.fillText("字", 320 + Math.sin(s) * 220, 120);
+  }};
+}
+function setSource(s){
+  if(src && src.type === "camera" && s.type !== "camera" && camStream){ camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+  if(src && src.url) URL.revokeObjectURL(src.url);
+  src = s; paused = false; updatePause();
+  $("bSample").setAttribute("aria-pressed", String(s.type === "sample"));
+  $("bCam").setAttribute("aria-pressed", String(s.type === "camera"));
+  $("msg").textContent = "";
+  relayout(); dirty = true;
+}
+function loadFile(file){
+  if(!file) return;
+  const url = URL.createObjectURL(file);
+  if(file.type.startsWith("image/")){
+    const img = new Image();
+    img.onload = () => setSource({type: "image", el: img, w: img.naturalWidth, h: img.naturalHeight, live: false, url});
+    img.onerror = () => $("msg").textContent = "この画像は開けませんでした。";
+    img.src = url;
+  } else {
+    const v = document.createElement("video");
+    v.muted = true; v.loop = true; v.playsInline = true; v.preload = "auto";
+    v.onloadedmetadata = () => {
+      setSource({type: "video", el: v, w: v.videoWidth, h: v.videoHeight, live: true, url});
+      v.play().catch(() => {});
+    };
+    v.onerror = () => $("msg").textContent = "この動画はブラウザで再生できませんでした。MP4(H.264)かWebMを試してください。";
+    v.src = url;
+  }
+}
+async function useCamera(){
+  try{
+    camStream = await navigator.mediaDevices.getUserMedia({video: {width: {ideal: 960}}, audio: false});
+    const v = document.createElement("video"); v.muted = true; v.playsInline = true; v.srcObject = camStream;
+    await v.play();
+    setSource({type: "camera", el: v, w: v.videoWidth, h: v.videoHeight, live: true});
+  }catch(e){
+    $("msg").textContent = "カメラを使えませんでした。ブラウザのカメラ許可を確認してください。";
+  }
+}
+
+/* ---------- 文字数・レイアウト ---------- */
+const nSlider = $("n");
+const N_MIN = 4, N_MAX = 600;
+const sliderToN = v => Math.round(N_MIN * Math.pow(N_MAX / N_MIN, v / 100));
+const nToSlider = n => Math.round(100 * Math.log(n / N_MIN) / Math.log(N_MAX / N_MIN));
+let L = null;
+function relayout(){
+  if(!src) return;
+  const n = sliderToN(+nSlider.value), W = src.w, H = src.h;
+  const rows = Math.max(1, Math.round(Math.sqrt(n * H / W))), cols = Math.max(1, Math.round(n / rows));
+  const long = 960;
+  let mw = W >= H ? long : Math.round(long * W / H), mh = W >= H ? Math.round(long * H / W) : long;
+  const cw = Math.max(2, Math.floor(mw / cols)), ch = Math.max(2, Math.floor(mh / rows));
+  mw = cw * cols; mh = ch * rows;
+  const panel = $("panelOn").checked, pw = panel ? Math.max(240, Math.round(mw * .42)) : 0;
+  const qc = Object.assign(document.createElement("canvas"), {width: cols * 16, height: rows * 16});
+  const qx = qc.getContext("2d", {willReadFrequently: true}); qx.imageSmoothingQuality = "high";
+  const mid = Object.assign(document.createElement("canvas"), {width: Math.min(W, cols * 64), height: Math.min(H, rows * 64)});
+  const mx = mid.getContext("2d"); mx.imageSmoothingQuality = "high";
+  L = {cols, rows, cw, ch, mw, mh, pw, qc, qx, mid, mx, n: cols * rows};
+  out.width = (mw + pw + 1) & ~1; out.height = (mh + 1) & ~1;
+  $("nVal").textContent = (cols * rows).toLocaleString("ja-JP") + "字（" + cols + "×" + rows + "）";
+  $("grid").textContent = cols + "×" + rows;
+  dirty = true;
+}
+
+/* ---------- マッチング ---------- */
+const K = 40;
+const candIdx = new Int32Array(K), candSc = new Float64Array(K);
+function matchCell(q, qc){
+  const {n, full, coarse} = dict;
+  let cnt = 0;
+  for(let i = 0; i < n; i++){
+    const o = i * 16, worst = cnt < K ? Infinity : candSc[K - 1];
+    let s = 0;
+    for(let j = 0; j < 16; j++){ const d = coarse[o + j] - qc[j]; s += d * d; if(s >= worst) break; }
+    if(s >= worst) continue;
+    let p = cnt < K ? cnt++ : K - 1;
+    while(p > 0 && candSc[p - 1] > s){ candSc[p] = candSc[p - 1]; candIdx[p] = candIdx[p - 1]; p--; }
+    candSc[p] = s; candIdx[p] = i;
+  }
+  let best = -1, bs = Infinity;
+  for(let c = 0; c < cnt; c++){
+    const i = candIdx[c], o = i * 256;
+    let s = 0;
+    for(let j = 0; j < 256; j++){ const d = full[o + j] - q[j]; s += d * d; if(s > bs) break; }
+    if(s < bs || (s === bs && i < best)){ bs = s; best = i; }
+  }
+  return best;
+}
+
+function render(){
+  if(!dict || !L || !src) return;
+  const {cols, rows, cw, ch, mw, mh, pw, qc, qx, mid, mx} = L;
+  const el = src.el;
+  if(src.type === "video" || src.type === "camera"){
+    if(el.readyState < 2 || !el.videoWidth) return;
+  }
+  mx.drawImage(el, 0, 0, mid.width, mid.height);
+  qx.drawImage(mid, 0, 0, qc.width, qc.height);
+  const qw = qc.width, qh = qc.height;
+  const px = qx.getImageData(0, 0, qw, qh).data;
+  const luma = new Uint8Array(qw * qh);
+  let lo = 255, hi = 0;
+  for(let i = 0; i < luma.length; i++){
+    const v = (px[i * 4] * 77 + px[i * 4 + 1] * 150 + px[i * 4 + 2] * 29) >> 8;
+    luma[i] = v; if(v < lo) lo = v; if(v > hi) hi = v;
+  }
+  const inv = $("invert").checked, stretch = $("contrast").checked && hi - lo > 8;
+  for(let i = 0; i < luma.length; i++){
+    let v = luma[i];
+    if(stretch) v = Math.round((v - lo) * 255 / (hi - lo));
+    luma[i] = inv ? 255 - v : v;
+  }
+  octx.fillStyle = "#000"; octx.fillRect(0, 0, out.width, out.height);
+  const q = new Uint8Array(256), qcv = new Uint8Array(16), picks = new Int32Array(cols * rows);
+  for(let cy = 0; cy < rows; cy++) for(let cx = 0; cx < cols; cx++){
+    for(let y = 0; y < 16; y++){
+      const o = (cy * 16 + y) * qw + cx * 16;
+      for(let x = 0; x < 16; x++) q[y * 16 + x] = luma[o + x];
+    }
+    coarseOf(q, qcv, 0);
+    const idx = matchCell(q, qcv);
+    picks[cy * cols + cx] = idx;
+    if(idx >= 0) octx.drawImage(glyphCanvas(idx), 0, 0, 64, 64, cx * cw, cy * ch, cw, ch);
+  }
+  if(pw) drawPanel(el, picks);
+}
+function drawPanel(el, picks){
+  const {cols, rows, mw, mh, pw} = L, x0 = mw, pad = 10;
+  octx.fillStyle = "#0a0a0e"; octx.fillRect(x0, 0, pw, out.height);
+  const iw = pw - pad * 2;
+  const ih = Math.min(Math.round(iw * src.h / src.w), Math.round(out.height * .55));
+  const iw2 = Math.round(ih * src.w / src.h);
+  octx.drawImage(el, x0 + pad + (iw - iw2) / 2, pad, iw2, ih);
+  const total = cols * rows;
+  const y0 = pad * 2 + ih;
+  octx.fillStyle = "#e6e6e6"; octx.textBaseline = "middle";
+  if(total > 144){
+    octx.font = "500 18px 'IBM Plex Mono',monospace";
+    octx.fillText(total + " chars", x0 + pad, y0 + 20);
+    return;
+  }
+  const pc = total <= 12 ? 2 : total <= 48 ? 3 : 4, prow = Math.ceil(total / pc);
+  const lineH = Math.max(8, Math.floor((out.height - y0 - pad) / prow)), colW = iw / pc;
+  const fs = Math.max(7, Math.min(22, lineH - 3, Math.floor(colW / 6.2)));
+  octx.font = "400 " + fs + "px 'IBM Plex Mono',monospace";
+  for(let i = 0; i < total; i++){
+    const idx = picks[i]; if(idx < 0) continue;
+    octx.fillText("U+" + dict.cps[idx].toString(16).toUpperCase().padStart(4, "0"),
+      x0 + pad + (i % pc) * colW, y0 + Math.floor(i / pc) * lineH + lineH / 2);
+  }
+}
+
+/* ---------- ループ ---------- */
+let frames = 0, fpsT = performance.now();
+function tick(t){
+  requestAnimationFrame(tick);
+  if(!dict || !src) return;
+  const live = src.live && !paused;
+  if(!live && !dirty) return;
+  if(live && src.tick) src.tick(t);
+  render(); dirty = false; frames++;
+  if(t - fpsT > 1000){ $("fps").textContent = Math.round(frames * 1000 / (t - fpsT)) + " fps"; frames = 0; fpsT = t; }
+}
+requestAnimationFrame(tick);
+
+/* ---------- 操作 ---------- */
+function updatePause(){
+  const b = $("bPause");
+  b.hidden = !src || !src.live;
+  b.textContent = paused ? "▶ 再生" : "⏸ 一時停止";
+}
+$("bPause").onclick = () => {
+  paused = !paused;
+  if(src.type === "video") paused ? src.el.pause() : src.el.play();
+  updatePause(); dirty = true;
+};
+$("bSample").onclick = () => setSource(makeSample());
+$("bCam").onclick = useCamera;
+$("file").onchange = e => { loadFile(e.target.files[0]); e.target.value = ""; };
+$("bFile").onkeydown = e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); $("file").click(); } };
+nSlider.oninput = relayout;
+document.querySelectorAll("#presets button").forEach(b => b.onclick = () => {
+  nSlider.value = nToSlider(+b.dataset.n); relayout();
+});
+["invert", "contrast"].forEach(id => $(id).onchange = () => dirty = true);
+$("panelOn").onchange = relayout;
+$("dictSel").onchange = e => buildDict(e.target.value);
+
+const stage = $("stage");
+["dragenter", "dragover"].forEach(ev => stage.addEventListener(ev, e => { e.preventDefault(); stage.classList.add("drag"); }));
+["dragleave", "drop"].forEach(ev => stage.addEventListener(ev, e => { e.preventDefault(); stage.classList.remove("drag"); }));
+stage.addEventListener("drop", e => loadFile(e.dataTransfer.files[0]));
+
+function download(blob, name){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+$("bPng").onclick = () => { render(); out.toBlob(b => b && download(b, "glyphmosaic.png"), "image/png"); };
+
+let rec = null, chunks = [], recVideoEnd = null;
+function stopRec(){
+  if(!rec) return;
+  const r = rec; rec = null; r.stop();
+  $("bRec").classList.remove("on"); $("bRec").textContent = "● 録画";
+  if(recVideoEnd){ src.el.removeEventListener("ended", recVideoEnd); src.el.loop = true; recVideoEnd = null; }
+}
+$("bRec").onclick = () => {
+  if(rec){ stopRec(); return; }
+  if(!window.MediaRecorder){ $("msg").textContent = "このブラウザは録画に対応していません。"; return; }
+  const mimes = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm", "video/mp4"];
+  const mimeType = mimes.find(m => MediaRecorder.isTypeSupported(m)) || "";
+  chunks = [];
+  rec = new MediaRecorder(out.captureStream(30), {mimeType, videoBitsPerSecond: 8e6});
+  rec.ondataavailable = e => e.data.size && chunks.push(e.data);
+  rec.onstop = () => download(new Blob(chunks, {type: mimeType || "video/webm"}), "glyphmosaic." + (mimeType.includes("mp4") ? "mp4" : "webm"));
+  if(src.type === "video"){
+    src.el.loop = false; src.el.currentTime = 0; paused = false; updatePause(); src.el.play().catch(() => {});
+    recVideoEnd = () => stopRec(); src.el.addEventListener("ended", recVideoEnd);
+  }
+  rec.start(250);
+  $("bRec").classList.add("on"); $("bRec").textContent = "■ 録画を止めて保存";
+};
+
+/* ---------- 起動 ---------- */
+nSlider.value = nToSlider(12);
+setSource(makeSample());
+buildDict("normal");
+window.__gm = {get dict(){ return dict; }, get layout(){ return L; }, loadFile};
+</script>
+</body>
+</html>
