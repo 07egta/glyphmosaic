@@ -58,6 +58,7 @@ canvas#out{display:block;max-width:100%;height:auto}
 button,.btn,select{font:inherit;color:var(--ink);background:transparent;border:1px solid var(--line);border-radius:4px;padding:8px 12px;cursor:pointer;min-height:40px}
 button:hover,.btn:hover{border-color:var(--accent)}
 button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:500}
+button.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);font-weight:500}
 button[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
 button.rec.on{background:#c62828;color:#fff;border-color:#c62828}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -603,6 +604,7 @@ function relayout(){
   out.width = (mw + pw + 1) & ~1; out.height = (mh + 1) & ~1;
   $("nVal").textContent = (cols * rows).toLocaleString("ja-JP") + "字（" + cols + "×" + rows + "）";
   $("grid").textContent = cols + "×" + rows;
+  document.querySelectorAll("#presets button").forEach(b => b.classList.toggle("on", Math.abs(cols * rows - +b.dataset.n) <= Math.max(2, +b.dataset.n * .1)));
   dirty = true;
 }
 
