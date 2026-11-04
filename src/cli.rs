@@ -5,13 +5,13 @@ use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 
 use crate::dict::build::{self, BuildOptions};
 use crate::dict::Dictionary;
 use crate::fonts::{collect_font_paths, FontSet};
 use crate::frame::queries_from_rgb;
-use crate::matching::match_cells;
+use crate::matching::{MatchResult, Matcher};
 use crate::render::{Compositor, Layout, RenderConfig};
 use crate::stats;
 use crate::video::decode::FrameReader;
@@ -382,6 +382,60 @@ struct RenderJob<'a> {
     no_encode: bool,
 }
 
+/// What the matching stage waits on. It comes from the reader thread, plus a
+/// notice from the writer thread if that one ends early.
+enum FrameMsg {
+    Frame(Vec<u8>),
+    Eof,
+    Failed(anyhow::Error),
+    /// The writer thread has exited. If this arrives while frames are still
+    /// being matched, the writer failed: stop instead of waiting for frames
+    /// that will never come (the writer's queued frame buffers die with it, so
+    /// the reader could otherwise wait forever for a free buffer).
+    WriterDone,
+}
+
+/// Sends `WriterDone` when the writer thread ends, however it ends (including
+/// a panic).
+struct WriterNotice(mpsc::Sender<FrameMsg>);
+
+impl Drop for WriterNotice {
+    fn drop(&mut self) {
+        let _ = self.0.send(FrameMsg::WriterDone);
+    }
+}
+
+/// Makes sure the matching stage hears about a reader thread that ends without
+/// reporting end-of-stream or an error (i.e. a panic).
+struct ReaderEnd {
+    tx: mpsc::Sender<FrameMsg>,
+    reported: bool,
+}
+
+impl Drop for ReaderEnd {
+    fn drop(&mut self) {
+        if !self.reported {
+            let _ = self.tx.send(FrameMsg::Failed(anyhow::anyhow!(
+                "the video reader stopped unexpectedly"
+            )));
+        }
+    }
+}
+
+/// What the matching stage sends to the compose-and-encode thread.
+enum WriteJob {
+    Frame {
+        frame: Vec<u8>,
+        matches: Vec<MatchResult>,
+        frame_no: u64,
+    },
+    /// Every frame has been sent and the input ended cleanly: close the file.
+    Finish,
+}
+
+/// Memory budget for decoded frames that are in flight between stages.
+const PIPELINE_BYTES: usize = 128 << 20;
+
 fn render_impl(job: RenderJob<'_>) -> Result<()> {
     if !job.no_encode && job.out.is_none() {
         bail!("--out is required unless --no-encode is set");
@@ -394,7 +448,7 @@ fn render_impl(job: RenderJob<'_>) -> Result<()> {
     let info = probe(job.input)?;
     validate_input(&info)?;
     let some_frame_count = info.frame_count;
-    let mut reader = FrameReader::open(job.input, info)?;
+    let reader = FrameReader::open(job.input, info)?;
     let (frame_w, frame_h) = reader.frame_dims();
     let mut config = job.config;
     if let Some(chars) = job.chars {
@@ -413,7 +467,7 @@ fn render_impl(job: RenderJob<'_>) -> Result<()> {
     let mut compositor = Compositor::new(config, fonts, frame_w, frame_h)?;
     let (canvas_w, canvas_h) = compositor.canvas_size();
 
-    let mut encoder = if job.no_encode {
+    let encoder = if job.no_encode {
         None
     } else {
         let out = job.out.expect("checked above");
@@ -459,60 +513,203 @@ fn render_impl(job: RenderJob<'_>) -> Result<()> {
             .progress_chars("=> "),
     );
 
-    let mut frame = vec![0u8; reader.frame_size()];
     let mut chars = Vec::new();
     let mut frame_no = 0u64;
     let mut unique_total = 0usize;
     let cells = config.grid_cols * config.grid_rows;
+    let mut matcher = Matcher::new(job.top_k, job.exact, job.threads)?;
 
-    while job.limit.is_none_or(|limit| frame_no < limit) {
-        if !reader.read_frame(&mut frame)? {
-            break;
-        }
-        let queries = queries_from_rgb(
-            &frame,
-            frame_w as usize,
-            frame_h as usize,
-            config.grid_cols,
-            config.grid_rows,
-        )?;
-        let (matches, match_stats) =
-            match_cells(&dict, &queries, job.top_k, job.exact, job.threads);
-        unique_total += match_stats.unique;
+    // The work is a three-stage pipeline so the stages overlap instead of
+    // taking turns on every frame:
+    //   reader thread:   ffmpeg -> decoded frame
+    //   this thread:     frame -> cell features -> glyph matches (-> codepoint dump)
+    //   writer thread:   compose the mosaic and feed the encoder
+    // Frames are handled strictly in order, so the output is the same as doing
+    // everything in one loop. Frame buffers are recycled through `free_*`, which
+    // also bounds how far the reader can run ahead.
+    let frame_size = reader.frame_size();
+    let pool_size = (PIPELINE_BYTES / frame_size.max(1)).clamp(3, 8);
+    let (free_tx, free_rx) = mpsc::channel::<Vec<u8>>();
+    for _ in 0..pool_size {
+        free_tx
+            .send(vec![0u8; frame_size])
+            .expect("the receiver is still alive");
+    }
+    let (frame_tx, frame_rx) = mpsc::channel::<FrameMsg>();
+    let limit = job.limit;
+    let dict_ref = &dict;
 
-        for (cell, result) in matches.iter().enumerate() {
-            let cp = dict.codepoints[result.index];
-            let ch = char::from_u32(cp).unwrap_or('\u{FFFD}');
-            chars.push(ch);
-            if let Some(writer) = &mut dump {
-                let printable = if matches!(ch, '\t' | '\n' | '\r') {
-                    ' '
-                } else {
-                    ch
+    let pipeline: Result<()> = std::thread::scope(|scope| {
+        let (job_tx, writer_thread) = match encoder {
+            Some(mut enc) => {
+                let (tx, rx) = mpsc::channel::<WriteJob>();
+                let free_tx = free_tx.clone();
+                let notice = WriterNotice(frame_tx.clone());
+                let handle = scope.spawn(move || -> Result<()> {
+                    let _notice = notice;
+                    loop {
+                        match rx.recv() {
+                            Ok(WriteJob::Frame {
+                                frame,
+                                matches,
+                                frame_no,
+                            }) => {
+                                let canvas =
+                                    compositor.compose(&frame, &matches, dict_ref, frame_no)?;
+                                enc.write(canvas)?;
+                                let _ = free_tx.send(frame);
+                            }
+                            Ok(WriteJob::Finish) => return enc.finish(),
+                            // The matching stage gave up (an error): the encoder
+                            // is dropped here, which stops ffmpeg.
+                            Err(_) => return Ok(()),
+                        }
+                    }
+                });
+                (Some(tx), Some(handle))
+            }
+            None => (None, None),
+        };
+
+        let reader_thread = scope.spawn(move || {
+            let mut reader = reader;
+            let mut end = ReaderEnd {
+                tx: frame_tx,
+                reported: false,
+            };
+            let mut read = 0u64;
+            loop {
+                if limit.is_some_and(|limit| read >= limit) {
+                    end.reported = true;
+                    let _ = end.tx.send(FrameMsg::Eof);
+                    return;
+                }
+                // Every other holder of a buffer is gone: nothing left to feed.
+                let Ok(mut buf) = free_rx.recv() else {
+                    end.reported = true;
+                    return;
                 };
-                writeln!(
-                    writer,
-                    "{frame_no}\t{cell}\tU+{cp:04X}\t{printable}\t{}\t{}",
-                    dict.font_indices[result.index], result.mse
+                match reader.read_frame(&mut buf) {
+                    Ok(true) => {
+                        read += 1;
+                        if end.tx.send(FrameMsg::Frame(buf)).is_err() {
+                            end.reported = true;
+                            return;
+                        }
+                    }
+                    Ok(false) => {
+                        end.reported = true;
+                        let _ = end.tx.send(FrameMsg::Eof);
+                        return;
+                    }
+                    Err(e) => {
+                        end.reported = true;
+                        let _ = end.tx.send(FrameMsg::Failed(e));
+                        return;
+                    }
+                }
+            }
+        });
+
+        let outcome = (|| -> Result<()> {
+            while job.limit.is_none_or(|limit| frame_no < limit) {
+                let frame = match frame_rx.recv() {
+                    Ok(FrameMsg::Frame(frame)) => frame,
+                    Ok(FrameMsg::Eof) => break,
+                    Ok(FrameMsg::Failed(e)) => return Err(e),
+                    // The writer's own error is reported when it is joined below.
+                    Ok(FrameMsg::WriterDone) => break,
+                    Err(_) => bail!("the video reader stopped unexpectedly"),
+                };
+                let queries = queries_from_rgb(
+                    &frame,
+                    frame_w as usize,
+                    frame_h as usize,
+                    config.grid_cols,
+                    config.grid_rows,
                 )?;
+                let (matches, match_stats) = matcher.match_cells(dict_ref, &queries);
+                unique_total += match_stats.unique;
+
+                for (cell, result) in matches.iter().enumerate() {
+                    let blank = result.index == crate::matching::BLANK;
+                    let cp = if blank {
+                        0x20
+                    } else {
+                        dict.codepoints[result.index]
+                    };
+                    let ch = char::from_u32(cp).unwrap_or('\u{FFFD}');
+                    chars.push(ch);
+                    if let Some(writer) = &mut dump {
+                        let printable = if matches!(ch, '\t' | '\n' | '\r') {
+                            ' '
+                        } else {
+                            ch
+                        };
+                        writeln!(
+                            writer,
+                            "{frame_no}\t{cell}\tU+{cp:04X}\t{printable}\t{}\t{}",
+                            if blank {
+                                0
+                            } else {
+                                dict.font_indices[result.index]
+                            },
+                            result.mse
+                        )?;
+                    }
+                }
+
+                frame_no += 1;
+                if frame_no % 16 == 0 {
+                    bar.set_position(frame_no);
+                }
+                match &job_tx {
+                    Some(tx) => {
+                        let sent = tx.send(WriteJob::Frame {
+                            frame,
+                            matches,
+                            frame_no: frame_no - 1,
+                        });
+                        if sent.is_err() {
+                            // The writer thread stopped; its error is reported below.
+                            break;
+                        }
+                    }
+                    None => {
+                        let _ = free_tx.send(frame);
+                    }
+                }
+            }
+            Ok(())
+        })();
+
+        // Shut down in dependency order: tell the writer whether to finish the
+        // file, wait for it, then release the reader.
+        if let (Ok(()), Some(tx)) = (&outcome, &job_tx) {
+            let _ = tx.send(WriteJob::Finish);
+        }
+        drop(job_tx);
+        let writer_outcome = writer_thread.map(|handle| handle.join());
+        drop(free_tx);
+        drop(frame_rx);
+        let reader_outcome = reader_thread.join();
+
+        outcome?;
+        if let Some(joined) = writer_outcome {
+            match joined {
+                Ok(result) => result?,
+                Err(_) => bail!("the encoder thread panicked"),
             }
         }
-
-        if let Some(enc) = &mut encoder {
-            let canvas = compositor.compose(&frame, &matches, &dict, frame_no)?;
-            enc.write(canvas)?;
+        if reader_outcome.is_err() {
+            bail!("the video reader thread panicked");
         }
-        frame_no += 1;
-        if frame_no % 16 == 0 {
-            bar.set_position(frame_no);
-        }
-    }
+        Ok(())
+    });
+    pipeline?;
     bar.set_position(frame_no);
     bar.finish_and_clear();
 
-    if let Some(enc) = encoder {
-        enc.finish()?;
-    }
     if let Some(mut writer) = dump {
         writer.flush()?;
     }

@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 
-use crate::imageops::{resize_area_gray, rgb_to_gray};
+use crate::imageops::resize_area_luma_from_rgb;
 use crate::matching::Query;
 use crate::raster::{features_from_coverage, Coverage, FEATURE_SIDE};
 
@@ -24,13 +24,10 @@ pub fn queries_from_rgb(
         );
     }
 
-    let mut gray = vec![0u8; sw * sh];
-    rgb_to_gray(rgb, &mut gray);
-
     let dw = cols * FEATURE_SIDE;
     let dh = rows * FEATURE_SIDE;
     let mut small = vec![0u8; dw * dh];
-    resize_area_gray(&gray, sw, sh, &mut small, dw, dh);
+    resize_area_luma_from_rgb(rgb, sw, sh, &mut small, dw, dh);
 
     let mut out = Vec::with_capacity(cols * rows);
     for cy in 0..rows {

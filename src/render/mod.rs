@@ -2,6 +2,7 @@ use anyhow::{bail, Result};
 use std::sync::Arc;
 
 use crate::dict::Dictionary;
+use crate::fonts::LazyFont;
 use crate::matching::MatchResult;
 use glyph_cache::GlyphCache;
 
@@ -37,12 +38,13 @@ pub struct Compositor {
     mosaic_h: u32,
     canvas: Vec<u8>,
     cache: GlyphCache,
+    panel: Option<panel::PanelPreview>,
 }
 
 impl Compositor {
     pub fn new(
         config: RenderConfig,
-        fonts: Arc<Vec<fontdue::Font>>,
+        fonts: Arc<Vec<LazyFont>>,
         src_w: u32,
         src_h: u32,
     ) -> Result<Self> {
@@ -70,6 +72,8 @@ impl Compositor {
         let canvas_h = mosaic_h;
 
         let cache = GlyphCache::new(fonts, cell_w, cell_h, config.cache_mb);
+        let panel = (config.layout == Layout::Panel)
+            .then(|| panel::PanelPreview::new(panel_w, mosaic_h, src_w, src_h));
         Ok(Self {
             config,
             src_w,
@@ -82,6 +86,7 @@ impl Compositor {
             mosaic_h,
             canvas: vec![0; canvas_w as usize * canvas_h as usize * 3],
             cache,
+            panel,
         })
     }
 
@@ -109,37 +114,50 @@ impl Compositor {
             bail!("got {} matches, expected {}", matches.len(), expected_cells);
         }
 
-        self.canvas.fill(0);
+        // No clearing pass: the glyph cells tile the whole mosaic area and the
+        // panel (if any) paints the rest, so every canvas byte is written below.
+        self.cache.preload(
+            matches
+                .iter()
+                .filter_map(|r| dict.font_indices.get(r.index).copied()),
+        );
+        let stride = self.canvas_w as usize * 3;
+        let row_bytes = self.cell_w as usize * 3;
         for (i, result) in matches.iter().enumerate() {
+            let cx = i % self.config.grid_cols;
+            let cy = i / self.config.grid_cols;
+            if result.index == crate::matching::BLANK {
+                // Empty cell: plain black.
+                let ox = cx * self.cell_w as usize * 3;
+                let oy = cy * self.cell_h as usize;
+                for y in 0..self.cell_h as usize {
+                    let start = (oy + y) * stride + ox;
+                    self.canvas[start..start + row_bytes].fill(0);
+                }
+                continue;
+            }
             if result.index >= dict.len() {
                 bail!("match index {} is outside the dictionary", result.index);
             }
-            let cx = i % self.config.grid_cols;
-            let cy = i / self.config.grid_cols;
             let font_index = dict.font_indices[result.index];
             let cp = dict.codepoints[result.index];
             let bitmap = self.cache.get(font_index, cp)?;
-            if bitmap.len() != self.cell_w as usize * self.cell_h as usize {
+            if bitmap.len() != row_bytes * self.cell_h as usize {
                 bail!(
                     "glyph bitmap is {} bytes, expected {}",
                     bitmap.len(),
-                    self.cell_w as usize * self.cell_h as usize
+                    row_bytes * self.cell_h as usize
                 );
             }
-            let ox = cx as u32 * self.cell_w;
-            let oy = cy as u32 * self.cell_h;
-            for y in 0..self.cell_h {
-                for x in 0..self.cell_w {
-                    let v = bitmap[(y * self.cell_w + x) as usize];
-                    let idx = ((oy + y) * self.canvas_w + ox + x) as usize * 3;
-                    self.canvas[idx] = v;
-                    self.canvas[idx + 1] = v;
-                    self.canvas[idx + 2] = v;
-                }
+            let ox = cx * self.cell_w as usize * 3;
+            let oy = cy * self.cell_h as usize;
+            for (y, src_row) in bitmap.chunks_exact(row_bytes).enumerate() {
+                let start = (oy + y) * stride + ox;
+                self.canvas[start..start + row_bytes].copy_from_slice(src_row);
             }
         }
 
-        if self.config.layout == Layout::Panel {
+        if let Some(preview) = self.panel.as_mut() {
             panel::draw_panel(
                 &mut self.canvas,
                 self.canvas_w,
@@ -149,8 +167,7 @@ impl Compositor {
                 self.canvas_w - self.mosaic_w,
                 self.mosaic_h,
                 frame,
-                self.src_w,
-                self.src_h,
+                preview,
                 dict,
                 matches,
             );
@@ -179,7 +196,7 @@ mod tests {
             panel_width: 480,
             cache_mb: 16,
         };
-        let c = Compositor::new(cfg, Arc::new(vec![font]), 640, 480).unwrap();
+        let c = Compositor::new(cfg, Arc::new(vec![font.into()]), 640, 480).unwrap();
         assert_eq!(c.canvas_size(), (960, 720));
     }
 
@@ -198,7 +215,7 @@ mod tests {
             panel_width: 481,
             cache_mb: 16,
         };
-        let c = Compositor::new(cfg, Arc::new(vec![font]), 101, 75).unwrap();
+        let c = Compositor::new(cfg, Arc::new(vec![font.into()]), 101, 75).unwrap();
         let (w, h) = c.canvas_size();
         assert_eq!((w % 2, h % 2), (0, 0));
     }
@@ -227,7 +244,7 @@ mod tests {
             panel_width: 80,
             cache_mb: 8,
         };
-        let mut c = Compositor::new(cfg, Arc::new(vec![font]), 64, 48).unwrap();
+        let mut c = Compositor::new(cfg, Arc::new(vec![font.into()]), 64, 48).unwrap();
         let frame = vec![0u8; 64 * 48 * 3];
         let matches = vec![MatchResult { index: 0, mse: 0 }; 12];
         let out = c.compose(&frame, &matches, &dict, 0).unwrap();

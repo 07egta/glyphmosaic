@@ -1,0 +1,963 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GlyphMosaic</title>
+<meta name="description" content="映像を、実在するUnicode文字だけで描くブラウザ版ツール">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;900&display=swap">
+<style>
+/* 左: 出力キャンバス / 右: 操作パネル。スマホでは縦に積む */
+:root{
+  --bg:#eceef2; --panel:#ffffff; --ink:#14171f; --muted:#5d6574; --line:#d3d8e0;
+  --accent:#2a3fb5; --accent-ink:#ffffff; --stage:#000; --ok:#14804a; --warn:#b4540a;
+  --f-body:"Zen Kaku Gothic New","Hiragino Sans","Yu Gothic",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e1015; --panel:#171a22; --ink:#e8eaf0; --muted:#98a1b3; --line:#2a2f3b;
+    --accent:#8fa2ff; --accent-ink:#0e1015; --ok:#4fd18b; --warn:#f0a35e; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0e1015; --panel:#171a22; --ink:#e8eaf0; --muted:#98a1b3; --line:#2a2f3b;
+  --accent:#8fa2ff; --accent-ink:#0e1015; --ok:#4fd18b; --warn:#f0a35e; color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 var(--f-body);
+  padding-block:20px 40px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.wrap{max-width:1280px;margin:0 auto;display:grid;gap:16px}
+header{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 16px}
+h1{margin:0;font-weight:900;font-size:clamp(26px,4vw,40px);letter-spacing:.02em;line-height:1.1}
+header p{margin:0;color:var(--muted)}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;align-items:start}
+@media (max-width:880px){
+  .layout{display:block}
+  .panel{margin-top:16px}
+  .layout .stagebox{position:sticky;top:max(8px,env(safe-area-inset-top,0px));z-index:5;background:var(--bg);padding-bottom:4px}
+  canvas#out{max-height:40vh;width:auto}
+  button,.btn,select{min-height:46px}
+}
+.stage{position:relative;background:var(--stage);border:1px solid var(--line);border-radius:4px;overflow:hidden;
+  display:flex;align-items:center;justify-content:center;min-height:200px}
+.stage.drag{outline:3px dashed var(--accent);outline-offset:-6px}
+canvas#out{display:block;max-width:100%;height:auto}
+.overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
+  background:rgba(0,0,0,.72);color:#fff;font-size:15px;text-align:center;padding:16px}
+.bar{width:min(320px,80%);height:6px;background:#ffffff33;border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:#fff}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:16px;display:grid;gap:18px;min-width:0}
+.group{display:grid;gap:8px;min-width:0}
+.group>label:not(.check),.group>.lab{font-size:12px;letter-spacing:.08em;color:var(--muted);display:flex;justify-content:space-between;gap:8px}
+.group .val{font-family:var(--f-mono);color:var(--ink);letter-spacing:0}
+.row{display:flex;flex-wrap:wrap;gap:8px}
+button,.btn,select{font:inherit;color:var(--ink);background:transparent;border:1px solid var(--line);border-radius:4px;padding:8px 12px;cursor:pointer;min-height:40px}
+button:hover,.btn:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:500}
+button.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);font-weight:500}
+button[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+button.rec.on{background:#c62828;color:#fff;border-color:#c62828}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input[type=range]{width:100%;accent-color:var(--accent)}
+select{width:100%;background:var(--panel)}
+.check{display:flex;align-items:center;gap:8px;min-height:32px;cursor:pointer}
+.check input{width:18px;height:18px;accent-color:var(--accent)}
+.stats{display:flex;flex-wrap:wrap;gap:4px 16px;font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+.note{font-size:12.5px;color:var(--muted);margin:0}
+.msg{font-size:13px;color:var(--warn);min-height:1.2em;margin:0}
+input[type=file]{display:none}
+.stagebox{display:grid;gap:8px;min-width:0}
+.transport{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px}
+.transport button{min-height:38px;min-width:46px;padding:4px 10px}
+.transport input[type=range]{flex:1;min-width:0}
+.conv{display:grid;gap:10px;padding:12px;border:1px solid var(--accent);border-radius:4px}
+.prog{height:8px;background:var(--line);border-radius:4px;overflow:hidden}
+.prog i{display:block;height:100%;width:0;background:var(--accent)}
+.btn[aria-disabled="true"]{opacity:.45;pointer-events:none}
+button:disabled{opacity:.45;cursor:not-allowed}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>GlyphMosaic</h1>
+    <p>映像を、実在するUnicode文字だけで描きます。動画・画像・カメラをここに入れるだけ。</p>
+  </header>
+
+  <div class="layout">
+    <div class="stagebox">
+      <div class="stage" id="stage">
+        <canvas id="out" width="960" height="540"></canvas>
+        <div class="overlay" id="overlay"><div id="ovText">文字の辞書を作っています…</div><div class="bar"><i id="ovBar"></i></div></div>
+      </div>
+      <div class="transport" id="transport" hidden>
+        <button id="bPlay" aria-label="一時停止">⏸</button>
+        <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="再生位置" hidden>
+        <span class="val" id="tcode" hidden>0:00 / 0:00</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="group">
+        <div class="lab">① 映像を選ぶ</div>
+        <div class="row">
+          <button id="bSample" aria-pressed="true">サンプル</button>
+          <label class="btn" for="file" id="bFile" tabindex="0">ファイル</label>
+          <button id="bCam" aria-pressed="false">カメラ</button>
+        </div>
+        <input type="file" id="file" accept="video/*,image/*">
+        <p class="note">動画・画像のファイルは、この枠にドラッグしても入ります。端末の外には送られません。</p>
+        <p class="msg" id="msg" role="status"></p>
+      </div>
+
+      <div class="conv" id="convBox" hidden>
+          <div class="lab">動画を入れたとき</div>
+          <button id="bConv" class="primary">この動画を文字の動画に変換</button>
+          <div class="prog" id="convProg" hidden><i id="convBar"></i></div>
+          <p class="note" id="convMsg" role="status"></p>
+          <button id="bConvSave" class="primary" hidden>変換した動画を保存</button>
+          <label class="check"><input type="checkbox" id="autoConv" checked> 動画を入れたら自動で変換する</label>
+        </div>
+
+      <div class="group">
+        <label for="n">② 文字の数 <span class="val" id="nVal">12</span></label>
+        <input type="range" id="n" min="1" max="100" value="0" step="1">
+        <div class="row" id="presets">
+          <button data-n="12">12 (4×3)</button><button data-n="48">48</button><button data-n="144">144</button><button data-n="400">400</button><button data-n="1200">1200</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <label for="dictSel">③ 使う文字の量</label>
+        <select id="dictSel">
+          <option value="small">かんたん（約3千字・速い）</option>
+          <option value="normal" selected>ふつう（約1万字）</option>
+          <option value="large">たくさん（約3万字・漢字とハングル込み）</option>
+          <option value="all">ぜんぶ（全Unicode・初回は数十秒〜数分、メモリ大）</option>
+        </select>
+        <div class="stats"><span id="dictInfo">辞書 …</span></div>
+      </div>
+
+      <div class="group">
+        <div class="lab">④ 見た目</div>
+        <label class="check"><input type="checkbox" id="panelOn"> 元の映像と文字コードを横に表示</label>
+        <label class="check"><input type="checkbox" id="invert"> 白黒を反転</label>
+        <label class="check"><input type="checkbox" id="contrast" checked> コントラストを自動で整える</label>
+      </div>
+
+      <div class="group">
+        <div class="lab">⑤ 保存する</div>
+        <div class="row">
+          <button id="bPng">いまの画面を画像で保存</button>
+          <button id="bRec" class="rec">● 画面を録画する</button>
+        </div>
+        <p class="note" id="recNote"></p>
+        <div class="stats"><span id="fps">0 fps</span><span id="grid">-</span></div>
+      </div>
+      <p class="note">使われる文字は、この端末に入っているフォントで決まります。端末が違うと絵柄も少し変わります。</p>
+    </div>
+  </div>
+</div>
+
+<script src="mp4-muxer.js"></script>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const MOBILE = matchMedia("(pointer:coarse)").matches || Math.min(innerWidth, innerHeight) < 600;
+const FONT_STACK = '"Hiragino Sans","Yu Gothic","Noto Sans JP","Noto Sans CJK JP","Noto Sans Symbols 2","Noto Sans Symbols","Segoe UI Symbol","Apple Symbols","Arial Unicode MS",system-ui,sans-serif';
+
+/* ---------- 辞書づくり ---------- */
+const SMALL = [[0x21,0x7e],[0xa1,0x24f],[0x370,0x3ff],[0x400,0x4ff],[0x2190,0x23ff],[0x2500,0x27bf],[0x2800,0x28ff],[0x3001,0x303f],[0x3041,0x3096],[0x30a1,0x30fa]];
+const RANGES = {
+  small: SMALL,
+  normal: SMALL.concat([[0x2900,0x2bff],[0x4e00,0x62ff],[0x1d00,0x1dbf],[0x2c00,0x2c5f]]),
+  all: [[0x21,0xd7ff],[0xf900,0xfffd],[0x10000,0x1ffff],[0x20000,0x323af]],
+  large: SMALL.concat([[0x2900,0x2bff],[0x4e00,0x9fff],[0xac00,0xd7a3],[0x1d00,0x1dbf],[0x2c00,0x2c5f]])
+};
+/* 文字を描いて濃さを測る道具。ページでもワーカーでも同じものを使う */
+function makeRasterizer(mk){
+  const G = mk(96, 96), gx = G.getContext("2d", {willReadFrequently: true});
+  const T = mk(16, 16), tx = T.getContext("2d", {willReadFrequently: true});
+  gx.font = "64px " + FONT_STACK; gx.textAlign = "center"; gx.textBaseline = "middle";
+  tx.imageSmoothingQuality = "high";
+  function inkBox(cp){
+    gx.fillStyle = "#000"; gx.fillRect(0, 0, 96, 96);
+    gx.fillStyle = "#fff"; gx.fillText(String.fromCodePoint(cp), 48, 50);
+    const d = gx.getImageData(0, 0, 96, 96).data;
+    let x0 = 96, x1 = -1, y0 = 96, y1 = -1;
+    for(let y = 0; y < 96; y++){
+      const r = y * 384;
+      for(let x = 0; x < 96; x++){
+        const o = r + x * 4, R = d[o];
+        if(R > 24){
+          // 色つきの絵文字は文字として使わない
+          if(Math.abs(R - d[o + 1]) > 40 || Math.abs(R - d[o + 2]) > 40) return null;
+          if(x < x0) x0 = x; if(x > x1) x1 = x; if(y < y0) y0 = y; if(y > y1) y1 = y;
+        }
+      }
+    }
+    return x1 < 0 ? null : {x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1};
+  }
+  /* 外枠いっぱいに引き伸ばして16×16にしたときの濃さ */
+  function feature16(cp){
+    const b = inkBox(cp); if(!b) return null;
+    tx.fillStyle = "#000"; tx.fillRect(0, 0, 16, 16);
+    tx.drawImage(G, b.x, b.y, b.w, b.h, 0, 0, 16, 16);
+    const d = tx.getImageData(0, 0, 16, 16).data, f = new Uint8Array(256);
+    for(let i = 0; i < 256; i++) f[i] = d[i * 4];
+    return f;
+  }
+  return {G, inkBox, feature16};
+}
+const {G, inkBox, feature16} = makeRasterizer((w, h) => Object.assign(document.createElement("canvas"), {width: w, height: h}));
+function hash(f){ let h = 2166136261; for(let i = 0; i < f.length; i++){ h ^= f[i]; h = Math.imul(h, 16777619); } return h >>> 0; }
+function coarseOf(f, out, o){
+  for(let by = 0; by < 4; by++) for(let bx = 0; bx < 4; bx++){
+    let s = 0;
+    for(let y = 0; y < 4; y++) for(let x = 0; x < 4; x++) s += f[(by * 4 + y) * 16 + bx * 4 + x];
+    out[o + by * 4 + bx] = (s + 8) >> 4;
+  }
+}
+const TOFU_CPS = [0x378, 0x5ff, 0xffff, 0x2fffe, 0xe0fff, 0x1fffe, 0x9fff + 0x1000];
+const yieldUI = () => new Promise(r => setTimeout(r, 0));
+
+/* 文字・数字・記号だけを使う（未割り当て・結合記号・制御文字は除く） */
+const OKCP_RE = /^[\p{L}\p{N}\p{P}\p{S}]$/u;
+
+/* ---------- ワーカー（複数コアで並列に動かす） ---------- */
+function processBand(st, luma, qw, cols, nrows, out, res){
+  for(let cy = 0; cy < nrows; cy++) for(let cx = 0; cx < cols; cx++){
+    const ci = cy * cols + cx, po = ci * 256;
+    let sad = 0;
+    if(res === 16){
+      for(let y = 0; y < 16; y++){
+        const o = (cy * 16 + y) * qw + cx * 16, yo = y * 16;
+        for(let x = 0; x < 16; x++) q256[yo + x] = luma[o + x];
+      }
+    } else {
+      for(let y = 0; y < 16; y++){
+        const o = (cy * res + ((y * res) >> 4)) * qw + cx * res;
+        for(let x = 0; x < 16; x++) q256[y * 16 + x] = luma[o + ((x * res) >> 4)];
+      }
+    }
+    if(st.has){
+      const pl = st.prevLuma;
+      for(let j = 0; j < 256; j++){ const d = q256[j] - pl[po + j]; sad += d < 0 ? -d : d; }
+    }
+    if(st.has && sad <= REUSE_SAD){ out[ci] = st.prevPick[ci]; continue; }
+    coarseOf(q256, qc16, 0);
+    const idx = matchCell(q256, qc16);
+    out[ci] = idx; st.prevPick[ci] = idx; st.prevLuma.set(q256, po);
+  }
+  st.has = true;
+}
+function workerMain(){
+  let tofu = null, band = null;
+  const R = makeRasterizer((w, h) => new OffscreenCanvas(w, h));
+  self.onmessage = e => {
+    const m = e.data;
+    if(m.t === "raster"){
+      if(!tofu){ tofu = new Set(); for(const cp of m.tofu){ const f = R.feature16(cp); if(f) tofu.add(hash(f)); } }
+      const cps = [], feats = [];
+      for(let cp = m.a; cp <= m.b; cp++){
+        if(!OKCP_RE.test(String.fromCodePoint(cp))) continue;
+        const f = R.feature16(cp); if(f && !tofu.has(hash(f))){ cps.push(cp); feats.push(f); }
+      }
+      const buf = new Uint8Array(feats.length * 256);
+      feats.forEach((f, i) => buf.set(f, i * 256));
+      postMessage({t: "raster", id: m.id, cps: Int32Array.from(cps), feats: buf}, [buf.buffer]);
+    } else if(m.t === "dict"){ dict = m.d; if(band) band.st.has = false; }
+    else if(m.t === "band"){
+      band = {cols: m.cols, nrows: m.nrows, st: {prevLuma: new Uint8Array(m.cols * m.nrows * 256), prevPick: new Int32Array(m.cols * m.nrows), has: false}};
+    } else if(m.t === "frame"){
+      const out = new Int32Array(band.cols * band.nrows);
+      processBand(band.st, m.luma, m.qw, band.cols, band.nrows, out, m.res);
+      postMessage({t: "picks", seq: m.seq, picks: out}, [out.buffer]);
+    }
+  };
+}
+const REUSE_SAD = 768;   // 平均の明るさの差が3以下
+const K = 24;
+const candIdx = new Int32Array(K), candSc = new Float64Array(K), cdist = new Float64Array(256), probe = new Int32Array(32);
+const q256 = new Uint8Array(256), qc16 = new Uint8Array(16);
+let dict = null;
+function workerSource(){
+  return [
+    "const FONT_STACK = " + JSON.stringify(FONT_STACK) + ";",
+    "const REUSE_SAD = " + REUSE_SAD + ", K = " + K + ";",
+    "const candIdx = new Int32Array(K), candSc = new Float64Array(K), cdist = new Float64Array(256), probe = new Int32Array(32);",
+    "const q256 = new Uint8Array(256), qc16 = new Uint8Array(16);",
+    "let dict = null;",
+    "const OKCP_RE = " + OKCP_RE.toString() + ";",
+    hash.toString(), coarseOf.toString(), makeRasterizer.toString(), matchCell.toString(), processBand.toString(),
+    "(" + workerMain.toString() + ")();"
+  ].join("\n");
+}
+let pool;   // undefined=未作成, null=使えない
+const wopt = new URLSearchParams(location.search).get("w");
+function getPool(){
+  if(pool !== undefined) return pool;
+  pool = null;
+  try{
+    if(typeof OffscreenCanvas === "undefined" || typeof Worker === "undefined" || wopt === "0") return pool;
+    const url = URL.createObjectURL(new Blob([workerSource()], {type: "text/javascript"}));
+    const nw = wopt ? +wopt : Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
+    const p = {workers: [], on: {}, dead: false, fail: null};
+    for(let i = 0; i < nw; i++){
+      const w = new Worker(url);
+      w.onmessage = e => { const f = p.on[e.data.t]; if(f) f(e.data, w); };
+      w.onerror = () => { p.dead = true; if(p.fail) p.fail(); setupBands(); };
+      p.workers.push(w);
+    }
+    pool = p;
+  }catch(e){ pool = null; }
+  return pool;
+}
+const poolOk = () => pool && !pool.dead;
+
+let buildToken = 0, fullRedraw = true, curPick = null;
+
+/* 4×4の濃さで文字をグループ分けしておく。検索時は近いグループだけ見れば済む */
+function buildIndex(d){
+  const n = d.n, K = Math.max(8, Math.min(256, Math.round(Math.sqrt(n) / 1.4)));
+  const mean = new Float32Array(n);
+  for(let i = 0; i < n; i++){ let t = 0; for(let j = 0; j < 16; j++) t += d.coarse[i * 16 + j]; mean[i] = t; }
+  const order = Array.from({length: n}, (_, i) => i).sort((a, b) => mean[a] - mean[b]);
+  const cent = new Float32Array(K * 16), asg = new Uint16Array(n);
+  for(let k = 0; k < K; k++){
+    const i = order[Math.floor((k + .5) * n / K)];
+    for(let j = 0; j < 16; j++) cent[k * 16 + j] = d.coarse[i * 16 + j];
+  }
+  // 重心は一部の文字(最大2万)だけで学習し、全文字は最後に1回だけ振り分ける
+  const step = Math.max(1, Math.floor(n / 20000));
+  for(let it = 0; it < 7; it++){
+    const last = it === 6, sum = new Float64Array(K * 16), cnt = new Int32Array(K);
+    for(let i = last ? 0 : it % step; i < n; i += last ? 1 : step){
+      let best = 0, bd = Infinity;
+      for(let k = 0; k < K; k++){
+        let s2 = 0;
+        for(let j = 0; j < 16; j++){ const x = d.coarse[i * 16 + j] - cent[k * 16 + j]; s2 += x * x; if(s2 >= bd) break; }
+        if(s2 < bd){ bd = s2; best = k; }
+      }
+      asg[i] = best; cnt[best]++;
+      for(let j = 0; j < 16; j++) sum[best * 16 + j] += d.coarse[i * 16 + j];
+    }
+    if(last) break;
+    for(let k = 0; k < K; k++) if(cnt[k]) for(let j = 0; j < 16; j++) cent[k * 16 + j] = sum[k * 16 + j] / cnt[k];
+  }
+  const start = new Int32Array(K + 1);
+  for(let i = 0; i < n; i++) start[asg[i] + 1]++;
+  for(let k = 0; k < K; k++) start[k + 1] += start[k];
+  const fill = start.slice(0, K), perm = new Int32Array(n);
+  for(let i = 0; i < n; i++) perm[fill[asg[i]]++] = i;
+  const full = new Uint8Array(n * 256), coarse = new Uint8Array(n * 16), cps = new Int32Array(n);
+  let blank = 0;
+  for(let p = 0; p < n; p++){
+    const i = perm[p];
+    full.set(d.full.subarray(i * 256, i * 256 + 256), p * 256);
+    coarse.set(d.coarse.subarray(i * 16, i * 16 + 16), p * 16);
+    cps[p] = d.cps[i];
+    if(i === 0) blank = p;
+  }
+  return {n, full, coarse, cps, blank, K, cent, start};
+}
+
+/* 一度作った辞書は端末に保存して、次からは一瞬で開く */
+function idb(){ return new Promise((res, rej) => { const r = indexedDB.open("glyphmosaic", 1); r.onupgradeneeded = () => r.result.createObjectStore("dict"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+async function idbGet(k){ try{ const db = await idb(); return await new Promise(res => { const q = db.transaction("dict").objectStore("dict").get(k); q.onsuccess = () => res(q.result); q.onerror = () => res(null); }); }catch(e){ return null; } }
+async function idbPut(k, v){ try{ const db = await idb(); db.transaction("dict", "readwrite").objectStore("dict").put(v, k); }catch(e){} }
+const PROBE_CPS = [0x3042, 0x4e00, 0x2603, 0x2b1a, 0x30a2, 0x2592];
+function fingerprint(){
+  let h = 7;
+  for(const cp of PROBE_CPS){ const f = feature16(cp); h = (Math.imul(h, 31) + (f ? hash(f) : 5)) >>> 0; }
+  return "v4:" + h;
+}
+function installDict(d){
+  dict = d; glyphCache.clear(); fullRedraw = true; stSync.has = false; dirty = true;
+  if(poolOk()) for(const w of pool.workers) w.postMessage({t: "dict", d});
+  $("dictInfo").textContent = "辞書 " + (d.n - 1).toLocaleString("ja-JP") + " 字";
+}
+
+function rasterInWorkers(ranges, token, total){
+  const chunks = [];
+  for(const [a, b] of ranges) for(let c = a; c <= b; c += 384) chunks.push([c, Math.min(b, c + 383)]);
+  const results = new Array(chunks.length);
+  let next = 0, done = 0, doneCps = 0;
+  return new Promise((resolve, reject) => {
+    pool.fail = () => reject(new Error("worker"));
+    const feed = w => {
+      if(next >= chunks.length || token !== buildToken) return;
+      const id = next++;
+      w.postMessage({t: "raster", id, a: chunks[id][0], b: chunks[id][1], tofu: TOFU_CPS});
+    };
+    pool.on.raster = (m, w) => {
+      results[m.id] = m; done++; doneCps += chunks[m.id][1] - chunks[m.id][0] + 1;
+      showOverlay(true, "文字の辞書を作っています…（最初の1回だけ）", doneCps / total);
+      if(token !== buildToken) return resolve({n: 0, cps: new Int32Array(0), feats: new Uint8Array(0)});
+      if(done === chunks.length){
+        const seen = new Set(), cps = [], feats = [];
+        for(const r of results) for(let i = 0; i < r.cps.length; i++){
+          const f = r.feats.subarray(i * 256, i * 256 + 256), h = hash(f);
+          if(seen.has(h)) continue;
+          seen.add(h); cps.push(r.cps[i]); feats.push(f);
+        }
+        const buf = new Uint8Array(cps.length * 256);
+        feats.forEach((f, i) => buf.set(f, i * 256));
+        pool.on.raster = null; pool.fail = null;
+        resolve({n: cps.length, cps: Int32Array.from(cps), feats: buf});
+      } else feed(w);
+    };
+    for(const w of pool.workers) feed(w);
+  });
+}
+
+async function buildDict(kind){
+  const token = ++buildToken;
+  const ranges = RANGES[kind];
+  showOverlay(true, "文字の辞書を準備しています…", 0);
+  await yieldUI();
+  const fp = fingerprint();
+  const cached = await idbGet(kind);
+  if(token !== buildToken) return;
+  if(cached && cached.fp === fp){ installDict(cached.d); showOverlay(false); return; }
+  let total = 0; for(const [a, b] of ranges) total += b - a + 1;
+  if(poolOk()){
+    try{
+      const part = await rasterInWorkers(ranges, token, total);
+      if(token !== buildToken) return;
+      const full = new Uint8Array((part.n + 1) * 256), coarse = new Uint8Array((part.n + 1) * 16), cps = new Int32Array(part.n + 1);
+      cps[0] = 0x20; full.set(part.feats, 256);
+      for(let i = 0; i < part.n; i++){ cps[i + 1] = part.cps[i]; coarseOf(part.feats.subarray(i * 256, i * 256 + 256), coarse, (i + 1) * 16); }
+      showOverlay(true, "検索の索引を作っています…", 1);
+      await yieldUI();
+      const d = buildIndex({n: part.n + 1, full, coarse, cps});
+      installDict(d); showOverlay(false); idbPut(kind, {fp, d});
+      return;
+    }catch(e){ if(token !== buildToken) return; }
+  }
+  const tofu = new Set();
+  for(const cp of TOFU_CPS){ const f = feature16(cp); if(f) tofu.add(hash(f)); }
+  const full = new Uint8Array((total + 1) * 256), coarse = new Uint8Array((total + 1) * 16), cps = new Int32Array(total + 1);
+  const seen = new Set();
+  cps[0] = 0x20;   // 0番は「何も描かない」。真っ暗なセルはここに当たり、黒い空白になる
+  let n = 1, done = 0, t0 = performance.now();
+  showOverlay(true, "文字の辞書を作っています…（最初の1回だけ）", 0);
+  for(const [a, b] of ranges){
+    for(let cp = a; cp <= b; cp++){
+      done++;
+      if(!OKCP_RE.test(String.fromCodePoint(cp))) continue;
+      const f = feature16(cp);
+      if(f){
+        const h = hash(f);
+        if(!tofu.has(h) && !seen.has(h)){
+          seen.add(h);
+          full.set(f, n * 256); coarseOf(f, coarse, n * 16); cps[n] = cp; n++;
+        }
+      }
+      if((done & 127) === 0 && performance.now() - t0 > 40){
+        showOverlay(true, "文字の辞書を作っています…（最初の1回だけ）", done / total);
+        await yieldUI(); t0 = performance.now();
+        if(token !== buildToken) return;
+      }
+    }
+  }
+  if(token !== buildToken) return;
+  showOverlay(true, "検索の索引を作っています…", 1);
+  await yieldUI();
+  const d = buildIndex({n, full: full.subarray(0, n * 256), coarse: coarse.subarray(0, n * 16), cps: cps.subarray(0, n)});
+  installDict(d);
+  showOverlay(false);
+  idbPut(kind, {fp, d});
+}
+function showOverlay(on, text, p){
+  $("overlay").hidden = !on;
+  if(text) $("ovText").textContent = text;
+  if(p != null) $("ovBar").style.width = Math.round(p * 100) + "%";
+}
+
+/* ---------- 画面に描く文字（キャッシュ） ---------- */
+const glyphCache = new Map();
+function glyphCanvas(idx){
+  let c = glyphCache.get(idx);
+  if(c) return c;
+  const cp = dict.cps[idx], b = inkBox(cp);
+  c = Object.assign(document.createElement("canvas"), {width: 64, height: 64});
+  const cx = c.getContext("2d"); cx.fillStyle = "#000"; cx.fillRect(0, 0, 64, 64);
+  cx.imageSmoothingQuality = "high";
+  if(b) cx.drawImage(G, b.x, b.y, b.w, b.h, 0, 0, 64, 64);
+  if(glyphCache.size > 6000) glyphCache.clear();
+  glyphCache.set(idx, c);
+  return c;
+}
+
+/* ---------- 映像の入力 ---------- */
+const out = $("out"), octx = out.getContext("2d");
+let src = null, paused = false, dirty = true, camStream = null;
+
+function makeSample(){
+  const c = Object.assign(document.createElement("canvas"), {width: 640, height: 360});
+  const x = c.getContext("2d");
+  return {type: "sample", el: c, w: 640, h: 360, live: true, tick(t){
+    const s = t / 1000;
+    x.fillStyle = "#000"; x.fillRect(0, 0, 640, 360);
+    const g = x.createLinearGradient(0, 0, 640, 0); g.addColorStop(0, "#222"); g.addColorStop(1, "#777");
+    x.fillStyle = g; x.fillRect(0, 300, 640, 60);
+    x.fillStyle = "#fff"; x.beginPath(); x.arc(320 + Math.cos(s * 1.3) * 190, 170 + Math.sin(s * 2.1) * 80, 70, 0, 7); x.fill();
+    x.strokeStyle = "#bbb"; x.lineWidth = 22;
+    for(let i = 0; i < 3; i++){ x.beginPath(); x.arc(320, 180, 60 + i * 55, s + i, s + i + 2.1); x.stroke(); }
+    x.fillStyle = "#fff"; x.font = "900 120px sans-serif"; x.textAlign = "center"; x.fillText("字", 320 + Math.sin(s) * 220, 120);
+  }};
+}
+function setSource(s){
+  if(src && src.type === "camera" && s.type !== "camera" && camStream){ camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+  if(src && src.url) URL.revokeObjectURL(src.url);
+  src = s; paused = false; updatePause();
+  if(s.el.requestVideoFrameCallback){
+    s.fresh = false;
+    const cb = () => { s.fresh = true; s.el.requestVideoFrameCallback(cb); };
+    s.el.requestVideoFrameCallback(cb);
+  }
+  $("bSample").setAttribute("aria-pressed", String(s.type === "sample"));
+  $("bCam").setAttribute("aria-pressed", String(s.type === "camera"));
+  $("msg").textContent = "";
+  conv.result = null; $("bConvSave").hidden = true; $("convMsg").textContent = ""; $("convProg").hidden = true;
+  relayout(); dirty = true;
+}
+function loadFile(file){
+  if(!file) return;
+  const url = URL.createObjectURL(file);
+  if(file.type.startsWith("image/")){
+    const img = new Image();
+    img.onload = () => setSource({type: "image", el: img, w: img.naturalWidth, h: img.naturalHeight, live: false, url});
+    img.onerror = () => $("msg").textContent = "この画像は開けませんでした。";
+    img.src = url;
+  } else {
+    const v = document.createElement("video");
+    v.muted = true; v.loop = true; v.playsInline = true; v.preload = "auto";
+    v.addEventListener("seeked", () => { dirty = true; });
+    v.onloadedmetadata = () => {
+      setSource({type: "video", el: v, w: v.videoWidth, h: v.videoHeight, live: true, url});
+      v.play().catch(() => {});
+      if($("autoConv").checked) setTimeout(convertVideo, 0);
+    };
+    v.onerror = () => $("msg").textContent = "この動画はブラウザで再生できませんでした。MP4(H.264)かWebMを試してください。";
+    v.src = url;
+  }
+}
+let facing = "user";
+async function useCamera(){
+  try{
+    if(camStream) camStream.getTracks().forEach(t => t.stop());
+    camStream = await navigator.mediaDevices.getUserMedia({video: {width: {ideal: MOBILE ? 640 : 960}, facingMode: {ideal: facing}}, audio: false});
+    const v = document.createElement("video"); v.muted = true; v.playsInline = true; v.srcObject = camStream;
+    await v.play();
+    setSource({type: "camera", el: v, w: v.videoWidth, h: v.videoHeight, live: true});
+  }catch(e){
+    $("msg").textContent = "カメラを使えませんでした。ブラウザのカメラ許可を確認してください。";
+  }
+}
+
+/* ---------- 文字数・レイアウト ---------- */
+const nSlider = $("n");
+const N_MIN = 4, N_MAX = 3000;
+const sliderToN = v => Math.round(N_MIN * Math.pow(N_MAX / N_MIN, v / 100));
+const nToSlider = n => Math.round(100 * Math.log(n / N_MIN) / Math.log(N_MAX / N_MIN));
+let L = null;
+function setupBands(){
+  if(!L) return;
+  inflight = false; frameSeq++;
+  L.bands = null;
+  if(!poolOk() || L.n < 400 || pool.workers.length < 2) return;   // 少ないセルや1コアでは、受け渡しのほうが高くつく
+  const nw = Math.min(pool.workers.length, L.rows), per = Math.ceil(L.rows / nw), bands = [];
+  for(let i = 0; i < nw; i++){
+    const r0 = i * per, r1 = Math.min(L.rows, r0 + per);
+    if(r0 >= r1) break;
+    pool.workers[i].postMessage({t: "band", cols: L.cols, nrows: r1 - r0});
+    bands.push({w: pool.workers[i], r0, r1});
+  }
+  L.bands = bands;
+}
+function relayout(){
+  if(!src) return;
+  const n = sliderToN(+nSlider.value), W = src.w, H = src.h;
+  const rows = Math.max(1, Math.round(Math.sqrt(n * H / W))), cols = Math.max(1, Math.round(n / rows));
+  const long = MOBILE ? 640 : 960;
+  let mw = W >= H ? long : Math.round(long * W / H), mh = W >= H ? Math.round(long * H / W) : long;
+  const cw = Math.max(2, Math.floor(mw / cols)), ch = Math.max(2, Math.floor(mh / rows));
+  mw = cw * cols; mh = ch * rows;
+  const panel = $("panelOn").checked, pw = panel ? Math.max(240, Math.round(mw * .42)) : 0;
+  // セルが多いときは1セルあたりの読み取り解像度を下げる（小さなセルに16×16は過剰）
+  const res = cols * rows > 600 ? 8 : 16;
+  const qc = Object.assign(document.createElement("canvas"), {width: cols * res, height: rows * res});
+  const qx = qc.getContext("2d", {willReadFrequently: true}); qx.imageSmoothingQuality = "high";
+  const mid = Object.assign(document.createElement("canvas"), {width: Math.min(W, cols * res * 4), height: Math.min(H, rows * res * 4)});
+  const mx = mid.getContext("2d"); mx.imageSmoothingQuality = "high";
+  L = {cols, rows, cw, ch, mw, mh, pw, qc, qx, mid, mx, n: cols * rows, res, luma: new Uint8Array(cols * res * rows * res)};
+  stSync.prevLuma = new Uint8Array(cols * rows * 256); stSync.prevPick = new Int32Array(cols * rows); stSync.has = false;
+  curPick = new Int32Array(cols * rows); fullRedraw = true;
+  setupBands();
+  out.width = (mw + pw + 1) & ~1; out.height = (mh + 1) & ~1;
+  $("nVal").textContent = (cols * rows).toLocaleString("ja-JP") + "字（" + cols + "×" + rows + "）";
+  $("grid").textContent = cols + "×" + rows;
+  document.querySelectorAll("#presets button").forEach(b => b.classList.toggle("on", Math.abs(cols * rows - +b.dataset.n) <= Math.max(2, +b.dataset.n * .1)));
+  dirty = true;
+}
+
+/* ---------- マッチング ---------- */
+function matchCell(q, qc){
+  const {full, coarse, cent, start} = dict, KC = dict.K;
+  // 近いグループを選ぶ
+  for(let k = 0; k < KC; k++){
+    let s = 0;
+    for(let j = 0; j < 16; j++){ const d = cent[k * 16 + j] - qc[j]; s += d * d; }
+    cdist[k] = s;
+  }
+  const P = Math.min(KC, 32, Math.max(3, Math.round(KC / 12)));
+  for(let p = 0; p < P; p++){
+    let b = 0, bd = Infinity;
+    for(let k = 0; k < KC; k++) if(cdist[k] < bd){ bd = cdist[k]; b = k; }
+    probe[p] = b; cdist[b] = Infinity;
+  }
+  let cnt = 0;
+  for(let p = 0; p < P; p++){
+    const k = probe[p];
+    for(let i = start[k], e = start[k + 1]; i < e; i++){
+      const o = i * 16, worst = cnt < K ? Infinity : candSc[K - 1];
+      let s = 0;
+      for(let j = 0; j < 16; j++){ const d = coarse[o + j] - qc[j]; s += d * d; if(s >= worst) break; }
+      if(s >= worst) continue;
+      let pos = cnt < K ? cnt++ : K - 1;
+      while(pos > 0 && candSc[pos - 1] > s){ candSc[pos] = candSc[pos - 1]; candIdx[pos] = candIdx[pos - 1]; pos--; }
+      candSc[pos] = s; candIdx[pos] = i;
+    }
+  }
+  let best = dict.blank, bs = Infinity;
+  for(let c = 0; c < cnt; c++){
+    const i = candIdx[c], o = i * 256;
+    let s = 0;
+    for(let j = 0; j < 256; j++){ const d = full[o + j] - q[j]; s += d * d; if(s > bs) break; }
+    if(s < bs || (s === bs && i < best)){ bs = s; best = i; }
+  }
+  return best;
+}
+
+let inflight = false, frameSeq = 0, tStart = 0, msAvg = 0, frames = 0, fpsT = performance.now();
+const stSync = {prevLuma: null, prevPick: null, has: false};
+function prepare(){
+  if(!dict || !L || !src) return false;
+  const {qc, qx, mid, mx, luma} = L, el = src.el;
+  if(src.type === "video" || src.type === "camera"){
+    if(el.readyState < 2 || !el.videoWidth) return false;
+  }
+  mx.drawImage(el, 0, 0, mid.width, mid.height);
+  qx.drawImage(mid, 0, 0, qc.width, qc.height);
+  const px = qx.getImageData(0, 0, qc.width, qc.height).data;
+  let lo = 255, hi = 0;
+  for(let i = 0; i < luma.length; i++){
+    const v = (px[i * 4] * 77 + px[i * 4 + 1] * 150 + px[i * 4 + 2] * 29) >> 8;
+    luma[i] = v; if(v < lo) lo = v; if(v > hi) hi = v;
+  }
+  const inv = $("invert").checked, stretch = $("contrast").checked && hi - lo > 8;
+  if(stretch || inv){
+    const mul = stretch ? 255 / (hi - lo) : 1, off = stretch ? lo : 0;
+    for(let i = 0; i < luma.length; i++){
+      const v = stretch ? Math.round((luma[i] - off) * mul) : luma[i];
+      luma[i] = inv ? 255 - v : v;
+    }
+  }
+  return true;
+}
+/* 1コマ描く。ワーカー使用時は検索を投げて、返ってきてから描く。始められたら true */
+function render(){
+  if(inflight || !prepare()) return false;
+  tStart = performance.now();
+  const {cols, rows, qc, luma, bands} = L;
+  if(bands){
+    const seq = ++frameSeq, picks = new Int32Array(cols * rows);
+    let remaining = bands.length;
+    inflight = true;
+    pool.on.picks = (m, w) => {
+      if(m.seq !== seq) return;
+      const b = bands.find(x => x.w === w);
+      picks.set(m.picks, b.r0 * cols);
+      if(--remaining === 0){ inflight = false; apply(picks); }
+    };
+    for(const b of bands){
+      const slice = luma.slice(b.r0 * L.res * qc.width, b.r1 * L.res * qc.width);
+      b.w.postMessage({t: "frame", seq, qw: qc.width, res: L.res, luma: slice}, [slice.buffer]);
+    }
+  } else {
+    const picks = new Int32Array(cols * rows);
+    processBand(stSync, luma, qc.width, cols, rows, picks, L.res);
+    apply(picks);
+  }
+  return true;
+}
+/* 選ばれた文字を画面に描く。前のコマから変わったセルだけ描き直す */
+function apply(picks){
+  const {cols, rows, cw, ch, pw} = L, el = src.el;
+  const full = fullRedraw;
+  if(full){ octx.fillStyle = "#000"; octx.fillRect(0, 0, out.width, out.height); fullRedraw = false; }
+  const blank = dict.blank;
+  for(let cy = 0; cy < rows; cy++) for(let cx = 0; cx < cols; cx++){
+    const ci = cy * cols + cx, idx = picks[ci];
+    if(full || curPick[ci] !== idx){
+      curPick[ci] = idx;
+      if(idx === blank){ octx.fillStyle = "#000"; octx.fillRect(cx * cw, cy * ch, cw, ch); }
+      else octx.drawImage(glyphCanvas(idx), 0, 0, 64, 64, cx * cw, cy * ch, cw, ch);
+    }
+  }
+  if(pw) drawPanel(el, curPick);
+  frames++;
+  msAvg = msAvg * .9 + (performance.now() - tStart) * .1;
+}
+function drawPanel(el, picks){
+  const {cols, rows, mw, mh, pw} = L, x0 = mw, pad = 10;
+  octx.fillStyle = "#0a0a0e"; octx.fillRect(x0, 0, pw, out.height);
+  const iw = pw - pad * 2;
+  const ih = Math.min(Math.round(iw * src.h / src.w), Math.round(out.height * .55));
+  const iw2 = Math.round(ih * src.w / src.h);
+  octx.drawImage(el, x0 + pad + (iw - iw2) / 2, pad, iw2, ih);
+  const total = cols * rows;
+  const y0 = pad * 2 + ih;
+  octx.fillStyle = "#e6e6e6"; octx.textBaseline = "middle";
+  if(total > 144){
+    octx.font = "500 18px 'IBM Plex Mono',monospace";
+    octx.fillText(total + " chars", x0 + pad, y0 + 20);
+    return;
+  }
+  const pc = total <= 12 ? 2 : total <= 48 ? 3 : 4, prow = Math.ceil(total / pc);
+  const lineH = Math.max(8, Math.floor((out.height - y0 - pad) / prow)), colW = iw / pc;
+  const fs = Math.max(7, Math.min(22, lineH - 3, Math.floor(colW / 6.2)));
+  octx.font = "400 " + fs + "px 'IBM Plex Mono',monospace";
+  for(let i = 0; i < total; i++){
+    const idx = picks[i]; if(idx < 0 || idx === dict.blank) continue;
+    octx.fillText("U+" + dict.cps[idx].toString(16).toUpperCase().padStart(4, "0"),
+      x0 + pad + (i % pc) * colW, y0 + Math.floor(i / pc) * lineH + lineH / 2);
+  }
+}
+
+/* ---------- ループ ---------- */
+function tick(t){
+  requestAnimationFrame(tick);
+  if(!dict || !src || conv.running) return;
+  syncSeek();
+  const live = src.live && !paused;
+  if(!live && !dirty) return;
+  if(live && src.fresh === false && !dirty) return;   // 動画に新しいコマが来るまで待つ
+  if(live && src.tick) src.tick(t);
+  if(render()){
+    dirty = false;
+    if(src.fresh !== undefined) src.fresh = false;
+  }
+  if(t - fpsT > 1000){ $("fps").textContent = Math.round(frames * 1000 / (t - fpsT)) + " fps · 1コマ " + msAvg.toFixed(1) + " ms" + (L && L.bands ? " · " + L.bands.length + "並列" : ""); frames = 0; fpsT = t; }
+}
+requestAnimationFrame(tick);
+
+/* ---------- 操作 ---------- */
+const fmt = t => { t = Math.max(0, t | 0); return (t / 60 | 0) + ":" + String(t % 60).padStart(2, "0"); };
+function updatePause(){
+  $("transport").hidden = !src || !src.live;
+  $("bPlay").textContent = paused ? "▶" : "⏸";
+  $("bPlay").setAttribute("aria-label", paused ? "再生" : "一時停止");
+  const isVideo = !!src && src.type === "video";
+  $("seek").hidden = !isVideo; $("tcode").hidden = !isVideo;
+  updateHints();
+}
+function updateHints(){
+  if(!src) return;
+  const isVideo = src.type === "video", canConv = !!(window.VideoEncoder && window.Mp4Muxer);
+  $("convBox").hidden = !isVideo;
+  $("bRec").hidden = isVideo && canConv;   // 動画は「変換」が正解。変換できない環境だけ録画を出す
+  $("recNote").textContent = isVideo
+    ? (canConv ? "「変換」を押すと、動画をまるごと文字の動画（MP4）にします。音声は入りません。"
+               : "このブラウザは自動変換に未対応です。「画面を録画する」で、最初から最後まで録画して保存します。")
+    : "いま映っている映像をそのまま録画します。もう一度押すと止まって保存されます（スマホは共有画面が出ます）。";
+}
+$("bPlay").onclick = () => {
+  if(conv.running) return;
+  paused = !paused;
+  if(src.type === "video") paused ? src.el.pause() : src.el.play();
+  updatePause(); dirty = true;
+};
+let seeking = false;
+$("seek").oninput = () => {
+  if(!src || src.type !== "video" || conv.running) return;
+  seeking = true;
+  const t = $("seek").value / 1000 * (src.el.duration || 0);
+  src.el.currentTime = t;
+  $("tcode").textContent = fmt(t) + " / " + fmt(src.el.duration || 0);
+  dirty = true;
+};
+$("seek").onchange = () => { seeking = false; };
+function syncSeek(){
+  if(!src || src.type !== "video" || seeking || !src.el.duration) return;
+  const v = src.el;
+  $("seek").value = Math.round(v.currentTime / v.duration * 1000);
+  $("tcode").textContent = fmt(v.currentTime) + " / " + fmt(v.duration);
+}
+$("bSample").onclick = () => setSource(makeSample());
+$("bCam").onclick = () => { if(src && src.type === "camera") facing = facing === "user" ? "environment" : "user"; useCamera(); };
+$("file").onchange = e => { loadFile(e.target.files[0]); e.target.value = ""; };
+$("bFile").onkeydown = e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); $("file").click(); } };
+nSlider.oninput = relayout;
+document.querySelectorAll("#presets button").forEach(b => b.onclick = () => {
+  nSlider.value = nToSlider(+b.dataset.n); relayout();
+});
+["invert", "contrast"].forEach(id => $(id).onchange = () => dirty = true);
+$("panelOn").onchange = relayout;
+$("dictSel").onchange = e => buildDict(e.target.value);
+
+const stage = $("stage");
+["dragenter", "dragover"].forEach(ev => stage.addEventListener(ev, e => { e.preventDefault(); stage.classList.add("drag"); }));
+["dragleave", "drop"].forEach(ev => stage.addEventListener(ev, e => { e.preventDefault(); stage.classList.remove("drag"); }));
+stage.addEventListener("drop", e => loadFile(e.dataTransfer.files[0]));
+
+function download(blob, name){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+async function deliver(blob, name){
+  try{
+    const file = new File([blob], name, {type: blob.type});
+    if(MOBILE && navigator.canShare && navigator.canShare({files: [file]}) && navigator.userActivation && navigator.userActivation.isActive){
+      await navigator.share({files: [file]}); return;
+    }
+  }catch(e){ if(e && e.name === "AbortError") return; }
+  download(blob, name);
+}
+$("bPng").onclick = () => { out.toBlob(b => b && deliver(b, "glyphmosaic.png"), "image/png"); };
+
+let rec = null, chunks = [], recVideoEnd = null, recTimer = null, recT0 = 0;
+function stopRec(){
+  if(!rec) return;
+  const r = rec; rec = null; r.stop();
+  clearInterval(recTimer);
+  $("bRec").classList.remove("on"); $("bRec").textContent = "● 画面を録画する";
+  if(recVideoEnd){ src.el.removeEventListener("ended", recVideoEnd); src.el.loop = true; recVideoEnd = null; }
+}
+$("bRec").onclick = () => {
+  if(rec){ stopRec(); return; }
+  if(!window.MediaRecorder){ $("msg").textContent = "このブラウザは録画に対応していません。"; return; }
+  const mimes = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm", "video/mp4"];
+  const mimeType = mimes.find(m => MediaRecorder.isTypeSupported(m)) || "";
+  chunks = [];
+  rec = new MediaRecorder(out.captureStream(30), {mimeType, videoBitsPerSecond: MOBILE ? 4e6 : 8e6});
+  rec.ondataavailable = e => e.data.size && chunks.push(e.data);
+  rec.onstop = () => deliver(new Blob(chunks, {type: mimeType || "video/webm"}), "glyphmosaic." + (mimeType.includes("mp4") ? "mp4" : "webm"));
+  if(src.type === "video"){
+    src.el.loop = false; src.el.currentTime = 0; paused = false; updatePause(); src.el.play().catch(() => {});
+    recVideoEnd = () => stopRec(); src.el.addEventListener("ended", recVideoEnd);
+  }
+  rec.start(250);
+  recT0 = performance.now();
+  const label = () => { $("bRec").textContent = "■ 録画を止めて保存 " + fmt((performance.now() - recT0) / 1000); };
+  label(); recTimer = setInterval(label, 500);
+  $("bRec").classList.add("on");
+};
+
+/* ---------- 動画をまるごと変換（MP4） ---------- */
+const conv = {running: false, cancel: false, result: null};
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function seekTo(v, t){
+  return new Promise(res => {
+    if(Math.abs(v.currentTime - t) < 1e-4) return res();
+    const done = () => { v.removeEventListener("seeked", done); clearTimeout(to); res(); };
+    const to = setTimeout(done, 3000);
+    v.addEventListener("seeked", done);
+    v.currentTime = t;
+  });
+}
+async function pickCodec(w, h, fps, bitrate){
+  const list = [["avc1.640033", "avc"], ["avc1.640028", "avc"], ["avc1.4d0028", "avc"], ["avc1.42001f", "avc"], ["vp09.00.10.08", "vp9"]];
+  for(const [codec, mux] of list){
+    try{
+      const c = {codec, width: w, height: h, bitrate, framerate: fps};
+      const r = await VideoEncoder.isConfigSupported(c);
+      if(r.supported) return {cfg: c, mux};
+    }catch(e){}
+  }
+  return null;
+}
+const CONV_LOCK = "#presets button, #n, #dictSel, #panelOn, #invert, #contrast, #bSample, #bCam, #file, #bPng, #bRec, #seek, #bPlay, #autoConv";
+function setConvUi(on){
+  document.querySelectorAll(CONV_LOCK).forEach(el => { el.disabled = on; });
+  $("bFile").setAttribute("aria-disabled", String(on));
+  $("bConv").textContent = on ? "変換を中止" : "この動画を文字の動画に変換";
+  $("convProg").hidden = !on;
+  if(on){ $("bConvSave").hidden = true; conv.result = null; }
+}
+async function convertVideo(){
+  if(conv.running){ conv.cancel = true; return; }
+  if(!src || src.type !== "video") return;
+  if(!window.VideoEncoder || !window.Mp4Muxer){
+    $("convMsg").textContent = "このブラウザは動画の変換に未対応です。下の「画面を録画する」を使ってください。";
+    $("bRec").hidden = false; return;
+  }
+  const v = src.el;
+  if(!isFinite(v.duration) || v.duration <= 0){ $("convMsg").textContent = "動画の長さが分かりませんでした。"; return; }
+  conv.running = true; conv.cancel = false; setConvUi(true);
+  $("convMsg").textContent = dict ? "変換を始めます…" : "文字の辞書の準備を待っています…";
+  while(!dict) await sleep(200);
+  v.pause(); paused = true; updatePause(); setConvUi(true);
+  L.bands = null; stSync.has = false; fullRedraw = true;   // 変換中は1コマずつ確実に処理する
+  const fps = 30, total = Math.max(1, Math.floor(v.duration * fps));
+  const w = out.width, h = out.height;
+  let enc = null, ok = false;
+  try{
+    const pick = await pickCodec(w, h, fps, Math.round(Math.min(12e6, Math.max(2e6, w * h * fps * 0.12))));
+    if(!pick) throw new Error("このブラウザでは、この大きさの動画を作れませんでした。文字数を減らすか、録画を使ってください。");
+    const mux = new Mp4Muxer.Muxer({target: new Mp4Muxer.ArrayBufferTarget(), video: {codec: pick.mux, width: w, height: h}, fastStart: "in-memory"});
+    let encErr = null;
+    enc = new VideoEncoder({output: (c, m) => mux.addVideoChunk(c, m), error: e => { encErr = e; }});
+    enc.configure(pick.cfg);
+    const t0 = performance.now();
+    for(let k = 0; k < total; k++){
+      if(conv.cancel) throw new Error("変換を中止しました。");
+      if(encErr) throw encErr;
+      await seekTo(v, Math.min(v.duration - 0.001, (k + 0.5) / fps));
+      let tries = 0;
+      while(!render() && tries++ < 50) await sleep(20);
+      const f = new VideoFrame(out, {timestamp: Math.round(k * 1e6 / fps), duration: Math.round(1e6 / fps)});
+      enc.encode(f, {keyFrame: k % fps === 0}); f.close();
+      while(enc.encodeQueueSize > 6) await sleep(2);
+      if(k % 3 === 0 || k === total - 1){
+        const p = (k + 1) / total, left = (performance.now() - t0) / p * (1 - p) / 1000;
+        $("convBar").style.width = Math.round(p * 100) + "%";
+        $("convMsg").textContent = "変換中 " + Math.round(p * 100) + "%（残り約" + Math.ceil(left) + "秒）";
+      }
+    }
+    await enc.flush(); mux.finalize();
+    conv.result = {blob: new Blob([mux.target.buffer], {type: "video/mp4"}), name: "glyphmosaic.mp4"};
+    ok = true;
+  }catch(e){ $("convMsg").textContent = (e && e.message) || String(e); }
+  try{ if(enc && enc.state !== "closed") enc.close(); }catch(e){}
+  conv.running = false; setConvUi(false);
+  setupBands(); fullRedraw = true; stSync.has = false;
+  v.play().catch(() => {}); paused = false; updatePause(); dirty = true;
+  if(ok){
+    $("convMsg").textContent = "変換できました。";
+    $("bConvSave").textContent = "変換した動画を保存（" + (conv.result.blob.size / 1048576).toFixed(1) + " MB）";
+    $("bConvSave").hidden = false;
+  }
+}
+$("bConv").onclick = convertVideo;
+$("bConvSave").onclick = () => { if(conv.result) deliver(conv.result.blob, conv.result.name); };
+
+/* ---------- 起動 ---------- */
+nSlider.value = nToSlider(12);
+if(MOBILE) $("dictSel").value = "small";
+getPool();
+setSource(makeSample());
+buildDict($("dictSel").value);
+window.__gm = {get dict(){ return dict; }, get layout(){ return L; }, loadFile, render, relayout, settle: () => new Promise(r => { const c = () => inflight ? setTimeout(c, 0) : r(); c(); }), get picks(){ return curPick; }, setWorkers(on){ if(pool) pool.dead = !on; setupBands(); }};
+</script>
+</body>
+</html>
