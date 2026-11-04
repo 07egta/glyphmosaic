@@ -102,7 +102,7 @@ input[type=file]{display:none}
         <label for="n">② 文字の数 <span class="val" id="nVal">12</span></label>
         <input type="range" id="n" min="1" max="100" value="0" step="1">
         <div class="row" id="presets">
-          <button data-n="12">12 (4×3)</button><button data-n="48">48</button><button data-n="144">144</button><button data-n="400">400</button>
+          <button data-n="12">12 (4×3)</button><button data-n="48">48</button><button data-n="144">144</button><button data-n="400">400</button><button data-n="1200">1200</button>
         </div>
       </div>
 
@@ -151,40 +151,42 @@ const RANGES = {
   normal: SMALL.concat([[0x2900,0x2bff],[0x4e00,0x62ff],[0x1d00,0x1dbf],[0x2c00,0x2c5f]]),
   large: SMALL.concat([[0x2900,0x2bff],[0x4e00,0x9fff],[0xac00,0xd7a3],[0x1d00,0x1dbf],[0x2c00,0x2c5f]])
 };
-const G = Object.assign(document.createElement("canvas"), {width: 96, height: 96});
-const gx = G.getContext("2d", {willReadFrequently: true});
-const T = Object.assign(document.createElement("canvas"), {width: 16, height: 16});
-const tx = T.getContext("2d", {willReadFrequently: true});
-gx.font = "64px " + FONT_STACK; gx.textAlign = "center"; gx.textBaseline = "middle";
-tx.imageSmoothingQuality = "high";
-
-/* 文字を描いて、インクの外枠を返す。インクが無ければ null */
-function inkBox(cp){
-  gx.fillStyle = "#000"; gx.fillRect(0, 0, 96, 96);
-  gx.fillStyle = "#fff"; gx.fillText(String.fromCodePoint(cp), 48, 50);
-  const d = gx.getImageData(0, 0, 96, 96).data;
-  let x0 = 96, x1 = -1, y0 = 96, y1 = -1;
-  for(let y = 0; y < 96; y++){
-    const r = y * 384;
-    for(let x = 0; x < 96; x++){
-      const o = r + x * 4, R = d[o];
-      if(R > 24){
-        // 色つきの絵文字は文字として使わない
-        if(Math.abs(R - d[o + 1]) > 40 || Math.abs(R - d[o + 2]) > 40) return null;
-        if(x < x0) x0 = x; if(x > x1) x1 = x; if(y < y0) y0 = y; if(y > y1) y1 = y; }
+/* 文字を描いて濃さを測る道具。ページでもワーカーでも同じものを使う */
+function makeRasterizer(mk){
+  const G = mk(96, 96), gx = G.getContext("2d", {willReadFrequently: true});
+  const T = mk(16, 16), tx = T.getContext("2d", {willReadFrequently: true});
+  gx.font = "64px " + FONT_STACK; gx.textAlign = "center"; gx.textBaseline = "middle";
+  tx.imageSmoothingQuality = "high";
+  function inkBox(cp){
+    gx.fillStyle = "#000"; gx.fillRect(0, 0, 96, 96);
+    gx.fillStyle = "#fff"; gx.fillText(String.fromCodePoint(cp), 48, 50);
+    const d = gx.getImageData(0, 0, 96, 96).data;
+    let x0 = 96, x1 = -1, y0 = 96, y1 = -1;
+    for(let y = 0; y < 96; y++){
+      const r = y * 384;
+      for(let x = 0; x < 96; x++){
+        const o = r + x * 4, R = d[o];
+        if(R > 24){
+          // 色つきの絵文字は文字として使わない
+          if(Math.abs(R - d[o + 1]) > 40 || Math.abs(R - d[o + 2]) > 40) return null;
+          if(x < x0) x0 = x; if(x > x1) x1 = x; if(y < y0) y0 = y; if(y > y1) y1 = y;
+        }
+      }
     }
+    return x1 < 0 ? null : {x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1};
   }
-  return x1 < 0 ? null : {x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1};
+  /* 外枠いっぱいに引き伸ばして16×16にしたときの濃さ */
+  function feature16(cp){
+    const b = inkBox(cp); if(!b) return null;
+    tx.fillStyle = "#000"; tx.fillRect(0, 0, 16, 16);
+    tx.drawImage(G, b.x, b.y, b.w, b.h, 0, 0, 16, 16);
+    const d = tx.getImageData(0, 0, 16, 16).data, f = new Uint8Array(256);
+    for(let i = 0; i < 256; i++) f[i] = d[i * 4];
+    return f;
+  }
+  return {G, inkBox, feature16};
 }
-/* 外枠いっぱいに引き伸ばして16×16にしたときの濃さ */
-function feature16(cp){
-  const b = inkBox(cp); if(!b) return null;
-  tx.fillStyle = "#000"; tx.fillRect(0, 0, 16, 16);
-  tx.drawImage(G, b.x, b.y, b.w, b.h, 0, 0, 16, 16);
-  const d = tx.getImageData(0, 0, 16, 16).data, f = new Uint8Array(256);
-  for(let i = 0; i < 256; i++) f[i] = d[i * 4];
-  return f;
-}
+const {G, inkBox, feature16} = makeRasterizer((w, h) => Object.assign(document.createElement("canvas"), {width: w, height: h}));
 function hash(f){ let h = 2166136261; for(let i = 0; i < f.length; i++){ h ^= f[i]; h = Math.imul(h, 16777619); } return h >>> 0; }
 function coarseOf(f, out, o){
   for(let by = 0; by < 4; by++) for(let bx = 0; bx < 4; bx++){
@@ -196,8 +198,94 @@ function coarseOf(f, out, o){
 const TOFU_CPS = [0x378, 0x5ff, 0xffff, 0x2fffe, 0xe0fff, 0x1fffe, 0x9fff + 0x1000];
 const yieldUI = () => new Promise(r => setTimeout(r, 0));
 
-let dict = null;        // {n, full, coarse, cps, blank, K, cent, start}
-let buildToken = 0, fullRedraw = true, hasPrev = false, prevLuma = null, prevPick = null, curPick = null;
+/* ---------- ワーカー（複数コアで並列に動かす） ---------- */
+function processBand(st, luma, qw, cols, nrows, out, res){
+  for(let cy = 0; cy < nrows; cy++) for(let cx = 0; cx < cols; cx++){
+    const ci = cy * cols + cx, po = ci * 256;
+    let sad = 0;
+    if(res === 16){
+      for(let y = 0; y < 16; y++){
+        const o = (cy * 16 + y) * qw + cx * 16, yo = y * 16;
+        for(let x = 0; x < 16; x++) q256[yo + x] = luma[o + x];
+      }
+    } else {
+      for(let y = 0; y < 16; y++){
+        const o = (cy * res + ((y * res) >> 4)) * qw + cx * res;
+        for(let x = 0; x < 16; x++) q256[y * 16 + x] = luma[o + ((x * res) >> 4)];
+      }
+    }
+    if(st.has){
+      const pl = st.prevLuma;
+      for(let j = 0; j < 256; j++){ const d = q256[j] - pl[po + j]; sad += d < 0 ? -d : d; }
+    }
+    if(st.has && sad <= REUSE_SAD){ out[ci] = st.prevPick[ci]; continue; }
+    coarseOf(q256, qc16, 0);
+    const idx = matchCell(q256, qc16);
+    out[ci] = idx; st.prevPick[ci] = idx; st.prevLuma.set(q256, po);
+  }
+  st.has = true;
+}
+function workerMain(){
+  let tofu = null, band = null;
+  const R = makeRasterizer((w, h) => new OffscreenCanvas(w, h));
+  self.onmessage = e => {
+    const m = e.data;
+    if(m.t === "raster"){
+      if(!tofu){ tofu = new Set(); for(const cp of m.tofu){ const f = R.feature16(cp); if(f) tofu.add(hash(f)); } }
+      const cps = [], feats = [];
+      for(let cp = m.a; cp <= m.b; cp++){ const f = R.feature16(cp); if(f && !tofu.has(hash(f))){ cps.push(cp); feats.push(f); } }
+      const buf = new Uint8Array(feats.length * 256);
+      feats.forEach((f, i) => buf.set(f, i * 256));
+      postMessage({t: "raster", id: m.id, cps: Int32Array.from(cps), feats: buf}, [buf.buffer]);
+    } else if(m.t === "dict"){ dict = m.d; if(band) band.st.has = false; }
+    else if(m.t === "band"){
+      band = {cols: m.cols, nrows: m.nrows, st: {prevLuma: new Uint8Array(m.cols * m.nrows * 256), prevPick: new Int32Array(m.cols * m.nrows), has: false}};
+    } else if(m.t === "frame"){
+      const out = new Int32Array(band.cols * band.nrows);
+      processBand(band.st, m.luma, m.qw, band.cols, band.nrows, out, m.res);
+      postMessage({t: "picks", seq: m.seq, picks: out}, [out.buffer]);
+    }
+  };
+}
+const REUSE_SAD = 768;   // 平均の明るさの差が3以下
+const K = 24;
+const candIdx = new Int32Array(K), candSc = new Float64Array(K), cdist = new Float64Array(96), probe = new Int32Array(16);
+const q256 = new Uint8Array(256), qc16 = new Uint8Array(16);
+let dict = null;
+function workerSource(){
+  return [
+    "const FONT_STACK = " + JSON.stringify(FONT_STACK) + ";",
+    "const REUSE_SAD = " + REUSE_SAD + ", K = " + K + ";",
+    "const candIdx = new Int32Array(K), candSc = new Float64Array(K), cdist = new Float64Array(96), probe = new Int32Array(16);",
+    "const q256 = new Uint8Array(256), qc16 = new Uint8Array(16);",
+    "let dict = null;",
+    hash.toString(), coarseOf.toString(), makeRasterizer.toString(), matchCell.toString(), processBand.toString(),
+    "(" + workerMain.toString() + ")();"
+  ].join("\n");
+}
+let pool;   // undefined=未作成, null=使えない
+const wopt = new URLSearchParams(location.search).get("w");
+function getPool(){
+  if(pool !== undefined) return pool;
+  pool = null;
+  try{
+    if(typeof OffscreenCanvas === "undefined" || typeof Worker === "undefined" || wopt === "0") return pool;
+    const url = URL.createObjectURL(new Blob([workerSource()], {type: "text/javascript"}));
+    const nw = wopt ? +wopt : Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
+    const p = {workers: [], on: {}, dead: false, fail: null};
+    for(let i = 0; i < nw; i++){
+      const w = new Worker(url);
+      w.onmessage = e => { const f = p.on[e.data.t]; if(f) f(e.data, w); };
+      w.onerror = () => { p.dead = true; if(p.fail) p.fail(); setupBands(); };
+      p.workers.push(w);
+    }
+    pool = p;
+  }catch(e){ pool = null; }
+  return pool;
+}
+const poolOk = () => pool && !pool.dead;
+
+let buildToken = 0, fullRedraw = true, curPick = null;
 
 /* 4×4の濃さで文字をグループ分けしておく。検索時は近いグループだけ見れば済む */
 function buildIndex(d){
@@ -252,8 +340,42 @@ function fingerprint(){
   return "v3:" + h;
 }
 function installDict(d){
-  dict = d; glyphCache.clear(); fullRedraw = true; hasPrev = false; dirty = true;
+  dict = d; glyphCache.clear(); fullRedraw = true; stSync.has = false; dirty = true;
+  if(poolOk()) for(const w of pool.workers) w.postMessage({t: "dict", d});
   $("dictInfo").textContent = "辞書 " + (d.n - 1).toLocaleString("ja-JP") + " 字";
+}
+
+function rasterInWorkers(ranges, token, total){
+  const chunks = [];
+  for(const [a, b] of ranges) for(let c = a; c <= b; c += 384) chunks.push([c, Math.min(b, c + 383)]);
+  const results = new Array(chunks.length);
+  let next = 0, done = 0, doneCps = 0;
+  return new Promise((resolve, reject) => {
+    pool.fail = () => reject(new Error("worker"));
+    const feed = w => {
+      if(next >= chunks.length || token !== buildToken) return;
+      const id = next++;
+      w.postMessage({t: "raster", id, a: chunks[id][0], b: chunks[id][1], tofu: TOFU_CPS});
+    };
+    pool.on.raster = (m, w) => {
+      results[m.id] = m; done++; doneCps += chunks[m.id][1] - chunks[m.id][0] + 1;
+      showOverlay(true, "文字の辞書を作っています…（最初の1回だけ）", doneCps / total);
+      if(token !== buildToken) return resolve({n: 0, cps: new Int32Array(0), feats: new Uint8Array(0)});
+      if(done === chunks.length){
+        const seen = new Set(), cps = [], feats = [];
+        for(const r of results) for(let i = 0; i < r.cps.length; i++){
+          const f = r.feats.subarray(i * 256, i * 256 + 256), h = hash(f);
+          if(seen.has(h)) continue;
+          seen.add(h); cps.push(r.cps[i]); feats.push(f);
+        }
+        const buf = new Uint8Array(cps.length * 256);
+        feats.forEach((f, i) => buf.set(f, i * 256));
+        pool.on.raster = null; pool.fail = null;
+        resolve({n: cps.length, cps: Int32Array.from(cps), feats: buf});
+      } else feed(w);
+    };
+    for(const w of pool.workers) feed(w);
+  });
 }
 
 async function buildDict(kind){
@@ -266,6 +388,20 @@ async function buildDict(kind){
   if(token !== buildToken) return;
   if(cached && cached.fp === fp){ installDict(cached.d); showOverlay(false); return; }
   let total = 0; for(const [a, b] of ranges) total += b - a + 1;
+  if(poolOk()){
+    try{
+      const part = await rasterInWorkers(ranges, token, total);
+      if(token !== buildToken) return;
+      const full = new Uint8Array((part.n + 1) * 256), coarse = new Uint8Array((part.n + 1) * 16), cps = new Int32Array(part.n + 1);
+      cps[0] = 0x20; full.set(part.feats, 256);
+      for(let i = 0; i < part.n; i++){ cps[i + 1] = part.cps[i]; coarseOf(part.feats.subarray(i * 256, i * 256 + 256), coarse, (i + 1) * 16); }
+      showOverlay(true, "検索の索引を作っています…", 1);
+      await yieldUI();
+      const d = buildIndex({n: part.n + 1, full, coarse, cps});
+      installDict(d); showOverlay(false); idbPut(kind, {fp, d});
+      return;
+    }catch(e){ if(token !== buildToken) return; }
+  }
   const tofu = new Set();
   for(const cp of TOFU_CPS){ const f = feature16(cp); if(f) tofu.add(hash(f)); }
   const full = new Uint8Array((total + 1) * 256), coarse = new Uint8Array((total + 1) * 16), cps = new Int32Array(total + 1);
@@ -386,10 +522,24 @@ async function useCamera(){
 
 /* ---------- 文字数・レイアウト ---------- */
 const nSlider = $("n");
-const N_MIN = 4, N_MAX = 600;
+const N_MIN = 4, N_MAX = 3000;
 const sliderToN = v => Math.round(N_MIN * Math.pow(N_MAX / N_MIN, v / 100));
 const nToSlider = n => Math.round(100 * Math.log(n / N_MIN) / Math.log(N_MAX / N_MIN));
 let L = null;
+function setupBands(){
+  if(!L) return;
+  inflight = false; frameSeq++;
+  L.bands = null;
+  if(!poolOk() || L.n < 400 || pool.workers.length < 2) return;   // 少ないセルや1コアでは、受け渡しのほうが高くつく
+  const nw = Math.min(pool.workers.length, L.rows), per = Math.ceil(L.rows / nw), bands = [];
+  for(let i = 0; i < nw; i++){
+    const r0 = i * per, r1 = Math.min(L.rows, r0 + per);
+    if(r0 >= r1) break;
+    pool.workers[i].postMessage({t: "band", cols: L.cols, nrows: r1 - r0});
+    bands.push({w: pool.workers[i], r0, r1});
+  }
+  L.bands = bands;
+}
 function relayout(){
   if(!src) return;
   const n = sliderToN(+nSlider.value), W = src.w, H = src.h;
@@ -399,13 +549,16 @@ function relayout(){
   const cw = Math.max(2, Math.floor(mw / cols)), ch = Math.max(2, Math.floor(mh / rows));
   mw = cw * cols; mh = ch * rows;
   const panel = $("panelOn").checked, pw = panel ? Math.max(240, Math.round(mw * .42)) : 0;
-  const qc = Object.assign(document.createElement("canvas"), {width: cols * 16, height: rows * 16});
+  // セルが多いときは1セルあたりの読み取り解像度を下げる（小さなセルに16×16は過剰）
+  const res = cols * rows > 600 ? 8 : 16;
+  const qc = Object.assign(document.createElement("canvas"), {width: cols * res, height: rows * res});
   const qx = qc.getContext("2d", {willReadFrequently: true}); qx.imageSmoothingQuality = "high";
-  const mid = Object.assign(document.createElement("canvas"), {width: Math.min(W, cols * 64), height: Math.min(H, rows * 64)});
+  const mid = Object.assign(document.createElement("canvas"), {width: Math.min(W, cols * res * 4), height: Math.min(H, rows * res * 4)});
   const mx = mid.getContext("2d"); mx.imageSmoothingQuality = "high";
-  L = {cols, rows, cw, ch, mw, mh, pw, qc, qx, mid, mx, n: cols * rows, luma: new Uint8Array(cols * 16 * rows * 16)};
-  prevLuma = new Uint8Array(cols * rows * 256); prevPick = new Int32Array(cols * rows); curPick = new Int32Array(cols * rows);
-  hasPrev = false; fullRedraw = true;
+  L = {cols, rows, cw, ch, mw, mh, pw, qc, qx, mid, mx, n: cols * rows, res, luma: new Uint8Array(cols * res * rows * res)};
+  stSync.prevLuma = new Uint8Array(cols * rows * 256); stSync.prevPick = new Int32Array(cols * rows); stSync.has = false;
+  curPick = new Int32Array(cols * rows); fullRedraw = true;
+  setupBands();
   out.width = (mw + pw + 1) & ~1; out.height = (mh + 1) & ~1;
   $("nVal").textContent = (cols * rows).toLocaleString("ja-JP") + "字（" + cols + "×" + rows + "）";
   $("grid").textContent = cols + "×" + rows;
@@ -413,8 +566,6 @@ function relayout(){
 }
 
 /* ---------- マッチング ---------- */
-const K = 24;
-const candIdx = new Int32Array(K), candSc = new Float64Array(K), cdist = new Float64Array(96), probe = new Int32Array(16);
 function matchCell(q, qc){
   const {full, coarse, cent, start} = dict, KC = dict.K;
   // 近いグループを選ぶ
@@ -452,19 +603,17 @@ function matchCell(q, qc){
   return best;
 }
 
-const REUSE_SAD = 256 * 3;   // 前のコマとほぼ同じセルは、選び直さず前の文字を使う（ちらつきも減る）
-const q256 = new Uint8Array(256), qc16 = new Uint8Array(16);
-function render(){
-  if(!dict || !L || !src) return;
-  const {cols, rows, cw, ch, pw, qc, qx, mid, mx, luma} = L;
-  const el = src.el;
+let inflight = false, frameSeq = 0, tStart = 0, msAvg = 0, frames = 0, fpsT = performance.now();
+const stSync = {prevLuma: null, prevPick: null, has: false};
+function prepare(){
+  if(!dict || !L || !src) return false;
+  const {qc, qx, mid, mx, luma} = L, el = src.el;
   if(src.type === "video" || src.type === "camera"){
-    if(el.readyState < 2 || !el.videoWidth) return;
+    if(el.readyState < 2 || !el.videoWidth) return false;
   }
   mx.drawImage(el, 0, 0, mid.width, mid.height);
   qx.drawImage(mid, 0, 0, qc.width, qc.height);
-  const qw = qc.width, qh = qc.height;
-  const px = qx.getImageData(0, 0, qw, qh).data;
+  const px = qx.getImageData(0, 0, qc.width, qc.height).data;
   let lo = 255, hi = 0;
   for(let i = 0; i < luma.length; i++){
     const v = (px[i * 4] * 77 + px[i * 4 + 1] * 150 + px[i * 4 + 2] * 29) >> 8;
@@ -474,38 +623,55 @@ function render(){
   if(stretch || inv){
     const mul = stretch ? 255 / (hi - lo) : 1, off = stretch ? lo : 0;
     for(let i = 0; i < luma.length; i++){
-      let v = stretch ? Math.round((luma[i] - off) * mul) : luma[i];
+      const v = stretch ? Math.round((luma[i] - off) * mul) : luma[i];
       luma[i] = inv ? 255 - v : v;
     }
   }
+  return true;
+}
+/* 1コマ描く。ワーカー使用時は検索を投げて、返ってきてから描く。始められたら true */
+function render(){
+  if(inflight || !prepare()) return false;
+  tStart = performance.now();
+  const {cols, rows, qc, luma, bands} = L;
+  if(bands){
+    const seq = ++frameSeq, picks = new Int32Array(cols * rows);
+    let remaining = bands.length;
+    inflight = true;
+    pool.on.picks = (m, w) => {
+      if(m.seq !== seq) return;
+      const b = bands.find(x => x.w === w);
+      picks.set(m.picks, b.r0 * cols);
+      if(--remaining === 0){ inflight = false; apply(picks); }
+    };
+    for(const b of bands){
+      const slice = luma.slice(b.r0 * L.res * qc.width, b.r1 * L.res * qc.width);
+      b.w.postMessage({t: "frame", seq, qw: qc.width, res: L.res, luma: slice}, [slice.buffer]);
+    }
+  } else {
+    const picks = new Int32Array(cols * rows);
+    processBand(stSync, luma, qc.width, cols, rows, picks, L.res);
+    apply(picks);
+  }
+  return true;
+}
+/* 選ばれた文字を画面に描く。前のコマから変わったセルだけ描き直す */
+function apply(picks){
+  const {cols, rows, cw, ch, pw} = L, el = src.el;
   const full = fullRedraw;
   if(full){ octx.fillStyle = "#000"; octx.fillRect(0, 0, out.width, out.height); fullRedraw = false; }
   const blank = dict.blank;
   for(let cy = 0; cy < rows; cy++) for(let cx = 0; cx < cols; cx++){
-    const ci = cy * cols + cx, po = ci * 256;
-    let sad = 0;
-    for(let y = 0; y < 16; y++){
-      const o = (cy * 16 + y) * qw + cx * 16;
-      for(let x = 0; x < 16; x++){
-        const v = luma[o + x]; q256[y * 16 + x] = v;
-        if(hasPrev) sad += Math.abs(v - prevLuma[po + y * 16 + x]);
-      }
-    }
-    let idx;
-    if(hasPrev && sad <= REUSE_SAD) idx = prevPick[ci];
-    else {
-      coarseOf(q256, qc16, 0);
-      idx = matchCell(q256, qc16);
-      prevPick[ci] = idx; prevLuma.set(q256, po);
-    }
+    const ci = cy * cols + cx, idx = picks[ci];
     if(full || curPick[ci] !== idx){
       curPick[ci] = idx;
       if(idx === blank){ octx.fillStyle = "#000"; octx.fillRect(cx * cw, cy * ch, cw, ch); }
       else octx.drawImage(glyphCanvas(idx), 0, 0, 64, 64, cx * cw, cy * ch, cw, ch);
     }
   }
-  hasPrev = true;
   if(pw) drawPanel(el, curPick);
+  frames++;
+  msAvg = msAvg * .9 + (performance.now() - tStart) * .1;
 }
 function drawPanel(el, picks){
   const {cols, rows, mw, mh, pw} = L, x0 = mw, pad = 10;
@@ -534,7 +700,6 @@ function drawPanel(el, picks){
 }
 
 /* ---------- ループ ---------- */
-let frames = 0, fpsT = performance.now(), msAvg = 0;
 function tick(t){
   requestAnimationFrame(tick);
   if(!dict || !src) return;
@@ -542,11 +707,11 @@ function tick(t){
   if(!live && !dirty) return;
   if(live && src.fresh === false && !dirty) return;   // 動画に新しいコマが来るまで待つ
   if(live && src.tick) src.tick(t);
-  const t0 = performance.now();
-  render(); dirty = false; frames++;
-  if(src.fresh !== undefined) src.fresh = false;
-  msAvg = msAvg * .9 + (performance.now() - t0) * .1;
-  if(t - fpsT > 1000){ $("fps").textContent = Math.round(frames * 1000 / (t - fpsT)) + " fps · 1コマ " + msAvg.toFixed(1) + " ms"; frames = 0; fpsT = t; }
+  if(render()){
+    dirty = false;
+    if(src.fresh !== undefined) src.fresh = false;
+  }
+  if(t - fpsT > 1000){ $("fps").textContent = Math.round(frames * 1000 / (t - fpsT)) + " fps · 1コマ " + msAvg.toFixed(1) + " ms" + (L && L.bands ? " · " + L.bands.length + "並列" : ""); frames = 0; fpsT = t; }
 }
 requestAnimationFrame(tick);
 
@@ -593,7 +758,7 @@ async function deliver(blob, name){
   }catch(e){ if(e && e.name === "AbortError") return; }
   download(blob, name);
 }
-$("bPng").onclick = () => { render(); out.toBlob(b => b && deliver(b, "glyphmosaic.png"), "image/png"); };
+$("bPng").onclick = () => { out.toBlob(b => b && deliver(b, "glyphmosaic.png"), "image/png"); };
 
 let rec = null, chunks = [], recVideoEnd = null;
 function stopRec(){
@@ -622,9 +787,10 @@ $("bRec").onclick = () => {
 /* ---------- 起動 ---------- */
 nSlider.value = nToSlider(12);
 if(MOBILE) $("dictSel").value = "small";
+getPool();
 setSource(makeSample());
 buildDict($("dictSel").value);
-window.__gm = {get dict(){ return dict; }, get layout(){ return L; }, loadFile, render, relayout};
+window.__gm = {get dict(){ return dict; }, get layout(){ return L; }, loadFile, render, relayout, settle: () => new Promise(r => { const c = () => inflight ? setTimeout(c, 0) : r(); c(); }), get picks(){ return curPick; }, setWorkers(on){ if(pool) pool.dead = !on; setupBands(); }};
 </script>
 </body>
 </html>
