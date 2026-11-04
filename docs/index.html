@@ -112,6 +112,7 @@ input[type=file]{display:none}
           <option value="small">かんたん（約3千字・速い）</option>
           <option value="normal" selected>ふつう（約1万字）</option>
           <option value="large">たくさん（約3万字・漢字とハングル込み）</option>
+          <option value="all">ぜんぶ（全Unicode・初回は数十秒〜数分、メモリ大）</option>
         </select>
         <div class="stats"><span id="dictInfo">辞書 …</span></div>
       </div>
@@ -149,6 +150,7 @@ const SMALL = [[0x21,0x7e],[0xa1,0x24f],[0x370,0x3ff],[0x400,0x4ff],[0x2190,0x23
 const RANGES = {
   small: SMALL,
   normal: SMALL.concat([[0x2900,0x2bff],[0x4e00,0x62ff],[0x1d00,0x1dbf],[0x2c00,0x2c5f]]),
+  all: [[0x21,0xd7ff],[0xf900,0xfffd],[0x10000,0x1ffff],[0x20000,0x323af]],
   large: SMALL.concat([[0x2900,0x2bff],[0x4e00,0x9fff],[0xac00,0xd7a3],[0x1d00,0x1dbf],[0x2c00,0x2c5f]])
 };
 /* 文字を描いて濃さを測る道具。ページでもワーカーでも同じものを使う */
@@ -198,6 +200,9 @@ function coarseOf(f, out, o){
 const TOFU_CPS = [0x378, 0x5ff, 0xffff, 0x2fffe, 0xe0fff, 0x1fffe, 0x9fff + 0x1000];
 const yieldUI = () => new Promise(r => setTimeout(r, 0));
 
+/* 文字・数字・記号だけを使う（未割り当て・結合記号・制御文字は除く） */
+const OKCP_RE = /^[\p{L}\p{N}\p{P}\p{S}]$/u;
+
 /* ---------- ワーカー（複数コアで並列に動かす） ---------- */
 function processBand(st, luma, qw, cols, nrows, out, res){
   for(let cy = 0; cy < nrows; cy++) for(let cx = 0; cx < cols; cx++){
@@ -233,7 +238,10 @@ function workerMain(){
     if(m.t === "raster"){
       if(!tofu){ tofu = new Set(); for(const cp of m.tofu){ const f = R.feature16(cp); if(f) tofu.add(hash(f)); } }
       const cps = [], feats = [];
-      for(let cp = m.a; cp <= m.b; cp++){ const f = R.feature16(cp); if(f && !tofu.has(hash(f))){ cps.push(cp); feats.push(f); } }
+      for(let cp = m.a; cp <= m.b; cp++){
+        if(!OKCP_RE.test(String.fromCodePoint(cp))) continue;
+        const f = R.feature16(cp); if(f && !tofu.has(hash(f))){ cps.push(cp); feats.push(f); }
+      }
       const buf = new Uint8Array(feats.length * 256);
       feats.forEach((f, i) => buf.set(f, i * 256));
       postMessage({t: "raster", id: m.id, cps: Int32Array.from(cps), feats: buf}, [buf.buffer]);
@@ -249,16 +257,17 @@ function workerMain(){
 }
 const REUSE_SAD = 768;   // 平均の明るさの差が3以下
 const K = 24;
-const candIdx = new Int32Array(K), candSc = new Float64Array(K), cdist = new Float64Array(96), probe = new Int32Array(16);
+const candIdx = new Int32Array(K), candSc = new Float64Array(K), cdist = new Float64Array(256), probe = new Int32Array(32);
 const q256 = new Uint8Array(256), qc16 = new Uint8Array(16);
 let dict = null;
 function workerSource(){
   return [
     "const FONT_STACK = " + JSON.stringify(FONT_STACK) + ";",
     "const REUSE_SAD = " + REUSE_SAD + ", K = " + K + ";",
-    "const candIdx = new Int32Array(K), candSc = new Float64Array(K), cdist = new Float64Array(96), probe = new Int32Array(16);",
+    "const candIdx = new Int32Array(K), candSc = new Float64Array(K), cdist = new Float64Array(256), probe = new Int32Array(32);",
     "const q256 = new Uint8Array(256), qc16 = new Uint8Array(16);",
     "let dict = null;",
+    "const OKCP_RE = " + OKCP_RE.toString() + ";",
     hash.toString(), coarseOf.toString(), makeRasterizer.toString(), matchCell.toString(), processBand.toString(),
     "(" + workerMain.toString() + ")();"
   ].join("\n");
@@ -289,7 +298,7 @@ let buildToken = 0, fullRedraw = true, curPick = null;
 
 /* 4×4の濃さで文字をグループ分けしておく。検索時は近いグループだけ見れば済む */
 function buildIndex(d){
-  const n = d.n, K = Math.max(8, Math.min(96, Math.round(Math.sqrt(n) / 1.4)));
+  const n = d.n, K = Math.max(8, Math.min(256, Math.round(Math.sqrt(n) / 1.4)));
   const mean = new Float32Array(n);
   for(let i = 0; i < n; i++){ let t = 0; for(let j = 0; j < 16; j++) t += d.coarse[i * 16 + j]; mean[i] = t; }
   const order = Array.from({length: n}, (_, i) => i).sort((a, b) => mean[a] - mean[b]);
@@ -298,9 +307,11 @@ function buildIndex(d){
     const i = order[Math.floor((k + .5) * n / K)];
     for(let j = 0; j < 16; j++) cent[k * 16 + j] = d.coarse[i * 16 + j];
   }
-  for(let it = 0; it < 6; it++){
-    const sum = new Float64Array(K * 16), cnt = new Int32Array(K);
-    for(let i = 0; i < n; i++){
+  // 重心は一部の文字(最大2万)だけで学習し、全文字は最後に1回だけ振り分ける
+  const step = Math.max(1, Math.floor(n / 20000));
+  for(let it = 0; it < 7; it++){
+    const last = it === 6, sum = new Float64Array(K * 16), cnt = new Int32Array(K);
+    for(let i = last ? 0 : it % step; i < n; i += last ? 1 : step){
       let best = 0, bd = Infinity;
       for(let k = 0; k < K; k++){
         let s2 = 0;
@@ -310,6 +321,7 @@ function buildIndex(d){
       asg[i] = best; cnt[best]++;
       for(let j = 0; j < 16; j++) sum[best * 16 + j] += d.coarse[i * 16 + j];
     }
+    if(last) break;
     for(let k = 0; k < K; k++) if(cnt[k]) for(let j = 0; j < 16; j++) cent[k * 16 + j] = sum[k * 16 + j] / cnt[k];
   }
   const start = new Int32Array(K + 1);
@@ -337,7 +349,7 @@ const PROBE_CPS = [0x3042, 0x4e00, 0x2603, 0x2b1a, 0x30a2, 0x2592];
 function fingerprint(){
   let h = 7;
   for(const cp of PROBE_CPS){ const f = feature16(cp); h = (Math.imul(h, 31) + (f ? hash(f) : 5)) >>> 0; }
-  return "v3:" + h;
+  return "v4:" + h;
 }
 function installDict(d){
   dict = d; glyphCache.clear(); fullRedraw = true; stSync.has = false; dirty = true;
@@ -412,6 +424,7 @@ async function buildDict(kind){
   for(const [a, b] of ranges){
     for(let cp = a; cp <= b; cp++){
       done++;
+      if(!OKCP_RE.test(String.fromCodePoint(cp))) continue;
       const f = feature16(cp);
       if(f){
         const h = hash(f);
@@ -574,7 +587,7 @@ function matchCell(q, qc){
     for(let j = 0; j < 16; j++){ const d = cent[k * 16 + j] - qc[j]; s += d * d; }
     cdist[k] = s;
   }
-  const P = Math.min(KC, Math.max(3, Math.round(KC / 10)));
+  const P = Math.min(KC, 32, Math.max(3, Math.round(KC / 12)));
   for(let p = 0; p < P; p++){
     let b = 0, bd = Infinity;
     for(let k = 0; k < KC; k++) if(cdist[k] < bd){ bd = cdist[k]; b = k; }
