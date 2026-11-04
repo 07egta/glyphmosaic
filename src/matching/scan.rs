@@ -128,6 +128,14 @@ pub fn match_one(dict: &Dictionary, q: &Query, top_k: usize, exact: bool) -> Mat
         };
         refine_full(dict, &q.full, &mid)
     };
+    // Nothing at all beats any glyph on a (nearly) black cell.
+    let blank: u32 = q.full.iter().map(|&v| u32::from(v) * u32::from(v)).sum();
+    if blank <= mse {
+        return MatchResult {
+            index: super::BLANK,
+            mse: blank,
+        };
+    }
     MatchResult { index, mse }
 }
 
@@ -179,6 +187,25 @@ mod tests {
         let r = match_one(&d, &q, 32, false);
         assert_eq!(r.index, 42);
         assert_eq!(r.mse, 0);
+    }
+
+    #[test]
+    fn black_cell_is_left_blank_and_bright_cell_is_not() {
+        let d = dict_with(500);
+        let black = Query {
+            full: [0u8; 256],
+            coarse: [0u8; 16],
+        };
+        for exact in [false, true] {
+            let r = match_one(&d, &black, 32, exact);
+            assert_eq!(r.index, super::super::BLANK);
+            assert_eq!(r.mse, 0);
+        }
+        let bright = Query {
+            full: [255u8; 256],
+            coarse: [255u8; 16],
+        };
+        assert_ne!(match_one(&d, &bright, 32, false).index, super::super::BLANK);
     }
 
     #[test]

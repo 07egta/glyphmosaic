@@ -632,7 +632,12 @@ fn render_impl(job: RenderJob<'_>) -> Result<()> {
                 unique_total += match_stats.unique;
 
                 for (cell, result) in matches.iter().enumerate() {
-                    let cp = dict.codepoints[result.index];
+                    let blank = result.index == crate::matching::BLANK;
+                    let cp = if blank {
+                        0x20
+                    } else {
+                        dict.codepoints[result.index]
+                    };
                     let ch = char::from_u32(cp).unwrap_or('\u{FFFD}');
                     chars.push(ch);
                     if let Some(writer) = &mut dump {
@@ -644,7 +649,12 @@ fn render_impl(job: RenderJob<'_>) -> Result<()> {
                         writeln!(
                             writer,
                             "{frame_no}\t{cell}\tU+{cp:04X}\t{printable}\t{}\t{}",
-                            dict.font_indices[result.index], result.mse
+                            if blank {
+                                0
+                            } else {
+                                dict.font_indices[result.index]
+                            },
+                            result.mse
                         )?;
                     }
                 }

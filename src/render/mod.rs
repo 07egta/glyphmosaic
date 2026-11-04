@@ -124,11 +124,21 @@ impl Compositor {
         let stride = self.canvas_w as usize * 3;
         let row_bytes = self.cell_w as usize * 3;
         for (i, result) in matches.iter().enumerate() {
+            let cx = i % self.config.grid_cols;
+            let cy = i / self.config.grid_cols;
+            if result.index == crate::matching::BLANK {
+                // Empty cell: plain black.
+                let ox = cx * self.cell_w as usize * 3;
+                let oy = cy * self.cell_h as usize;
+                for y in 0..self.cell_h as usize {
+                    let start = (oy + y) * stride + ox;
+                    self.canvas[start..start + row_bytes].fill(0);
+                }
+                continue;
+            }
             if result.index >= dict.len() {
                 bail!("match index {} is outside the dictionary", result.index);
             }
-            let cx = i % self.config.grid_cols;
-            let cy = i / self.config.grid_cols;
             let font_index = dict.font_indices[result.index];
             let cp = dict.codepoints[result.index];
             let bitmap = self.cache.get(font_index, cp)?;

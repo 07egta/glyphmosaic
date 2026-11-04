@@ -15,6 +15,10 @@ pub struct Query {
     pub coarse: [u8; 16],
 }
 
+/// `MatchResult::index` of a cell that is left empty (black). It is chosen when
+/// the cell is so dark that drawing any glyph would fit worse than nothing.
+pub const BLANK: usize = usize::MAX;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MatchResult {
     pub index: usize,
@@ -240,14 +244,14 @@ mod tests {
     }
 
     #[test]
-    fn black_query_still_returns_an_index() {
+    fn black_query_is_left_blank() {
         let d = dict(50);
         let q = Query {
             full: [0u8; 256],
             coarse: [0u8; 16],
         };
         let (r, _) = match_cells(&d, &[q], 8, false, 1);
-        assert!(r[0].index < d.len());
+        assert_eq!(r[0].index, BLANK);
     }
 
     #[test]

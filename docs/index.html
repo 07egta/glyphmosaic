@@ -199,7 +199,9 @@ async function buildDict(kind){
   for(const cp of TOFU_CPS){ const f = feature16(cp); if(f) tofu.add(hash(f)); }
   const full = new Uint8Array(total * 256), coarse = new Uint8Array(total * 16), cps = new Int32Array(total);
   const seen = new Set();
-  let n = 0, done = 0, t0 = performance.now();
+  // 0番は「何も描かない」。真っ暗なセルはここに当たり、黒い空白になる
+  full.fill(0, 0, 256); coarse.fill(0, 0, 16); cps[0] = 0x20;
+  let n = 1, done = 0, t0 = performance.now();
   showOverlay(true, "文字の辞書を作っています…", 0);
   for(const [a, b] of ranges){
     for(let cp = a; cp <= b; cp++){
